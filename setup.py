@@ -15,16 +15,6 @@ setup(  name='gruppy',
 			('/var/lib/gruppy',['data/gruppy.db']),
 			('/var/log/gruppy',['sys/gruppy.log'])
 	],
-	install_requires=[
-		'sqlite3',
-		'shutil',
-		'argparse',
-		'logging',
-		'datetime',
-		'fnmatch',
-		'shlex',
-		'warnings'
-	],
 	# scripts get installed into PATH, presumably /usr/bin
 	scripts=[ 'bin/gruppy', 'bin/gruppyd', 'bin/gruppy-run-once'],
         keywords='ELK, logstash, S3',
