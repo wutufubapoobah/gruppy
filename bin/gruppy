@@ -100,6 +100,10 @@ class FSPath(object):
 >""" % ("FSPath","path_template",self.path_template,"feed_name",self.feed_name,"pattern",self.pattern)
 
 	def find_files(self):
+		"""
+		Return a list of files found under path that match self.pattern,
+		where path is obtained through parameter substitution from self.path_template
+		"""
 
 		path = ''
 		if '$' in self.path_template:
@@ -146,6 +150,7 @@ class Feed(object):
 	 apply the transformation, then input using the tranformed copy.
 	"""
 	def __init__(self,name,cfgfile,enabled,transform,transformation):
+		"""initialize the object"""
 
 		self.name = name
 		self.cfgfile = cfgfile
@@ -173,6 +178,7 @@ class Feed(object):
 	self.enabled,"transform?",self.transform,"transformation",self.transformation)
 
 	def is_valid_config_file(self):
+		""" verify that self.cfgfile is a valid logstash config file """
 
 		msg = "checking to see if %s has a valid config file, please wait ... " % (self.name)
 		logger.info(msg)
@@ -198,6 +204,7 @@ class Feed(object):
 		return True
 
 	def fetch_interesting_paths(self):
+		""" fetch interesting paths from the database """
 
 		logger.info("fetching interesting paths for feed %s" % (self.name))
 
@@ -242,6 +249,7 @@ class Feed(object):
 		return interesting_paths
 
 def exit_handler():
+	""" things to do before we go """
 
         try:
                 os.remove(PIDFILE)
@@ -249,6 +257,7 @@ def exit_handler():
                 pass
 
 def init():
+	""" everything we want to do to prepare for success """
 
 	global cfg
 	global logger
@@ -342,8 +351,8 @@ def init():
 		logger.warning(msg)
     	#logger.warning("unable to write process id {%s} to pidfile {%s}" % (pid,PIDFILE))
 
-# returns a dictionary of feeds in which key is feed name
 def fetch_feeds():
+	""" return a dictionary of feeds in which key is feed name """
 
 	try:
 		conn = sqlite3.connect(cfg['dbfilespec'])
@@ -385,6 +394,7 @@ def fetch_feeds():
 	return feeds
 
 def fetch_a_feed(feed_name):
+	""" fetch an input feed """
 
 	logger.info("fetching input feed %s" % (feed_name))
 	try:
@@ -431,6 +441,7 @@ def fetch_a_feed(feed_name):
 	return obj
 
 def file_already_processed(filespec):
+	""" determine whether file was already processed, return T/F (on error, return None) """
 
 	try:
 		conn = sqlite3.connect(cfg['dbfilespec'])
@@ -491,6 +502,7 @@ def file_already_processed(filespec):
 #  on failure, returns None
 # 
 def transform_input_data(filespec,transformation):
+	""" transform file before using it as input """
 
 	# ideally, we'd safely and securely create tempfile using python tempfile module
 	# for the sake of velocity and to simplify diagnostics and troubleshooting,
@@ -520,11 +532,8 @@ def transform_input_data(filespec,transformation):
 	return tempfile
 
 
-"""
- In the present context, 'processing' a file means 
- cat file | /opt/logstash/bin/logstash -f feed.cfgfile
-"""
 def process_file(feed,filespec):
+	""" cat <inputfile> | <logstash-program> -f <feed-configfile> """
 
 	msg = "using the %s feed to process %s, please wait ... " % (feed.name,filespec)
 	logger.info(msg)
@@ -591,6 +600,7 @@ def process_file(feed,filespec):
 	return True
 
 def brag_about_success(feed,filespec):
+	""" here is where we update the record in db of files successfully processed """
 
 	try:
 		conn = sqlite3.connect(cfg['dbfilespec'])
@@ -629,8 +639,9 @@ def brag_about_success(feed,filespec):
 	return True
 
 def process_feed(feed):
+	""" fetch interesting paths associated with feed from db, then process those """
 
-	logger.info("processing conduig %s" % (feed.name))
+	logger.info("processing feed %s" % (feed.name))
 	# if feed is not enabled, ignore it
 	if not feed.enabled == True:
 		msg = "skipping disabled feed %s" % (feed.name)
@@ -682,6 +693,7 @@ def process_feed(feed):
 			time.sleep(1)
 
 def run_once(feed_name):
+	""" fetch feeds and process them on time only """
 
 	if feed_name == None:
 		# process all enabled feeds
@@ -703,7 +715,7 @@ def run_once(feed_name):
 
 
 def run_continuously(polling_interval, feed_name):
-
+	""" fetch feeds and process them, rinse and repeat, endlessly """
 	# could/should assert that polling interval is set
 	while(1):
 		run_once(feed_name)
@@ -712,6 +724,7 @@ def run_continuously(polling_interval, feed_name):
 
 
 def show_version():
+	""" show us what's what """
 
 	print " %s version %s" % (APPNAME, VERSION)
 	sys.exit(0)
@@ -719,7 +732,7 @@ def show_version():
 
 init()
 
-# MAIN starts here
+""" MAIN starts here """
 if args.interval == None:
 	logger.info("running once")
 	run_once(args.use)  # args.use is name of an input feed
