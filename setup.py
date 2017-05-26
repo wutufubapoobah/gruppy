@@ -14,7 +14,7 @@ setup(  name='gruppy',
 			('/etc/systemd/system',['sys/gruppy.service']),
 			('/var/lib/gruppy',['data/gruppy.db']),
 			('/var/log/gruppy',['sys/gruppy.log'])
-	]
+	],
 	install_requires=[
 		'sqlite3',
 		'shutil',
@@ -24,9 +24,10 @@ setup(  name='gruppy',
 		'fnmatch',
 		'shlex',
 		'warnings'
-	]
+	],
 	# scripts get installed into PATH, presumably /usr/bin
 	scripts=[ 'bin/gruppy', 'bin/gruppyd', 'bin/gruppy-run-once'],
+        keywords='ELK, logstash, S3',
 	classifiers=[
 		'Environment :: Console',
 		'Intended Audience :: System Administrators',
@@ -34,5 +35,5 @@ setup(  name='gruppy',
 		'Operating System :: Linux',
 		'Operating System :: CentOS'
 	],
-	log_description='See the README and contents of docs directory for full description' 
+	log_description='See the README and contents of docs directory for full description',
 	zip_safe=False)
