@@ -35,5 +35,5 @@ setup(  name='gruppy',
 		'Operating System :: Linux',
 		'Operating System :: CentOS'
 	],
-	log_description='See the README and contents of docs directory for full description',
+	long_description='See the README and contents of docs directory for full description',
 	zip_safe=False)
