@@ -64,7 +64,7 @@ __status__ = "Development"
 # some useful constants
 APPNAME = 'gruppy'
 PROGNAME = '%s' % (APPNAME) # synonym
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 PIDFILE = '/var/run/%s.pid' % (APPNAME)
 CFGFILE = '/etc/%s/%s.yml' % (APPNAME,APPNAME)
 

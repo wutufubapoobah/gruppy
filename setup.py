@@ -1,12 +1,13 @@
 from setuptools import setup
 
 setup(  name='gruppy',
-	version='0.1.0',
+	version='0.1.1',
 	description='Provides smart logstash flows optimized for use with S3',
 	url='https://github.com/wutufubapoobah/gruppy',
 	author='WutuFuBaPooBah',
 	author_email='wutufubapoobah@gmail.com',
-	license='GPL',
+	license='MIT',
+        platforms=['CentOS7'],
 	packages=['gruppy'],
         package_dir={'gruppy': 'gruppy'},
         data_files=[
@@ -15,15 +16,13 @@ setup(  name='gruppy',
 			('/var/lib/gruppy',['data/gruppy.db']),
 			('/var/log/gruppy',['sys/gruppy.log'])
 	],
-	# scripts get installed into PATH, presumably /usr/bin
 	scripts=[ 'bin/gruppy', 'bin/gruppyd', 'bin/gruppy-run-once'],
         keywords='ELK, logstash, S3',
 	classifiers=[
 		'Environment :: Console',
 		'Intended Audience :: System Administrators',
-		'License :: GPL',
-		'Operating System :: Linux',
-		'Operating System :: CentOS'
+		'License :: OSI Approved :: MIT License',
+		'Operating System :: POSIX :: Linux'
 	],
 	long_description='See the README and contents of docs directory for full description',
-	zip_safe=False)
+	zip_safe=True)
