@@ -1,0 +1,71 @@
+#!/bin/bash
+
+############
+# What it is
+#  gruppy-run-once
+#
+# What it does
+# 1. for each data feed defined in the database,
+# 2. run the gruppy program for that feed as a background process
+# 3. record the pid of the background process in /var/run/gruppy_<data-feed>.pid
+#
+# Assumptions
+# A1. using sqlite3 as database system
+# A2. database is located in /var/lib/gruppy
+# A3. database is named gruppy.db, i.e. /var/lib/gruppy/gruppy.db
+# A4. the gruppy program is in the path
+#
+# TODO 
+# Provide a check_preconditions function that
+# asserts the facticity of the assumptions
+###
+ #
+#
+
+db_cmd=sqlite3
+db_fil=/var/lib/gruppy.db
+db_qry='select name from logstash_input_feeds where enabled = 1'
+
+prog=gruppy
+
+function echo2stderr()
+{
+	(>&2 echo "$@")
+}
+
+function abort()
+{
+	echo2stderr "$@"
+	exit 1;
+}
+
+# the preconditions are
+# 1. sqlite3 program is available
+# 2. database file exists and is readable
+# 3. the gruppy program exists and is executable (prog)
+
+function check_preconditions()
+{
+	which sqlite3 >/dev/null 2>&1
+	[[ $? -eq 0 ]] || abort "sqlite3 program not found"
+
+	[[ -r $db_fil ]] || abort "data file not found at $db_fil"
+
+	[[ -x $prog ]] || abort "program not found or not executable: $prog"
+}
+
+function runit()
+{
+	# x is the feed name
+	for x in $($db_cmd $db_fil "$db_qry")
+	do
+	    pidfile=/var/run/gruppy_${x}.pid
+	    #$prog -m -u $x 
+	    echo "nohup $prog -m -u $x >/dev/null 2>/dev/null < /dev/null &"
+	    nohup $prog -m -u $x >/dev/null 2>/dev/null < /dev/null &
+	    echo "$!" > $pidfile
+	done
+}
+
+check_preconditions
+runit

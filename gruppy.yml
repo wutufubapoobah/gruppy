@@ -1,0 +1,9 @@
+# Gruppy configuration file
+# The format and valid keys are documented here
+# with default values commented out
+#
+# database.filespec: "/var/lib/gruppy/gruppy.db" 
+# logging.directory: "/var/log/gruppy" 
+# logging.filespec: "/var/log/gruppy/gruppy.log"
+# logging.level: "info"
+# logstash.program: "/usr/share/logstash/bin/logstash"

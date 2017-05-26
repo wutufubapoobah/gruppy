@@ -1,0 +1,45 @@
+Using ELK stack in a very AWS-intensive world.
+
+Organization wants to use S3 as much as humanly possible,
+rather than beats/filebeat/whatever. They have reasons.
+
+Challenge: S3 doesn't behave exactly like most *NIX filesystems.
+Apparently it doesn't play well with the default "file" 
+input mechanism that comes with logstash out of the box,
+especially with respect to keeping track of which data
+has already been read and which has yet to be read.
+
+An S3 plugin for logstash exists. Articles warn us, though,
+that the algorithm(s) it employs for the sake of keeping
+track of which log files have already been read and which
+haven't, and where we are/were in the file, may involve 
+brutal, inefficient, ugly force. 
+
+If you're using the logstash S3 plugin and it's working
+well for you, please disregard gruppy and move along,
+nothing to see here. 
+
+How does gruppy work?
+
+Sidestep any potential wonkiness with respect to S3 not
+behaving exactly as a filesystem is expected to behave
+by using cat to push the data into logstash via stdin.
+Yes, that's horrid, but it's rock-solid reliable, no?
+
+Gruppy keeps track of which files have already been processed
+by logstash in a local database. It currently supports
+only sqlite3. There are obvious disadvantages to handling
+things this way. One of the most glaring is that ELK is
+inherently distributed, so it's less than ideal, to say
+the least, to introduce a dependency on a non-distributed
+way of keeping track of this information. A very cool
+alternative might be to (1) write the data initially
+into files, (2) parse the files via logstash into ES,
+(3) have gruppy (or other tool) read current status
+from ES. That would be distributed, but it also adds
+steps and layers and moving parts and pieces and latency.
+Besides, each node only cares about its own read/parse
+progress with respect to raw source logs.
+
+Why wasn't gruppy implemented as a logstash plugin?
+Laziness? No time? It would be nice to do it that way. 

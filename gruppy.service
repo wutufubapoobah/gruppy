@@ -1,0 +1,15 @@
+[Unit]
+Description=Gruppy
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+#EnvironmentFile=/etc/sysconfig/gruppy
+ExecStart=/bin/sh -c '/usr/bin/gruppyd'
+ExecStop=/bin/sh -c '/bin/pkill -9 gruppy'
+WorkingDirectory=/
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
