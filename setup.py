@@ -10,10 +10,10 @@ setup(  name='gruppy',
 	packages=['gruppy'],
         package_dir={'gruppy': 'gruppy'},
         data_files=[
-			('/etc/gruppy',['gruppy.yml']),
-			('/etc/systemd/system',['gruppy.service']),
-			('/var/lib/gruppy',['gruppy.db'])
-			('/var/log/gruppy',['gruppy.log'])
+			('/etc/gruppy',['etc/gruppy.yml']),
+			('/etc/systemd/system',['sys/gruppy.service']),
+			('/var/lib/gruppy',['data/gruppy.db']),
+			('/var/log/gruppy',['sys/gruppy.log'])
 	]
 	install_requires=[
 		'sqlite3',
