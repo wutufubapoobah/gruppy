@@ -282,7 +282,7 @@ def init():
 		warnings.warn(msg)
 		pass
 
-	if config_read_succeeded == True:
+	if config_read_succeeded == True and not cfg_file_data == None:
 		if 'database.filespec' in cfg_file_data:
 			cfg['dbfilespec'] = cfg_file_data['database.filespec']
 		if 'logging.directory' in cfg_file_data:
