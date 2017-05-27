@@ -327,7 +327,7 @@ def init_configuration():
 
 	return
 
-def init_args():
+def init_arguments():
 
 	global args
 	argparser = argparse.ArgumentParser(
