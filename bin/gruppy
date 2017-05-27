@@ -631,7 +631,7 @@ def process_file(feed,filespec):
 		return False
 
 	cmd = None
-	cmdlog = '/var/log/fetch_%s_data.log' % (feed.name)
+	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
 	logger.info('command output is being written to %s' % (cmdlog))
 
 	if args.silent == False and args.more == True:
