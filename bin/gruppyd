@@ -26,7 +26,8 @@ db_cmd=sqlite3
 db_fil=/var/lib/gruppy/gruppy.db
 db_qry='select name from feeds where enabled = 1'
 
-prog=gruppy
+# needs full explicit path for gruppy.service
+prog=/bin/gruppy
 
 function echo2stderr()
 {

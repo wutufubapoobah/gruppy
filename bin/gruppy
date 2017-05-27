@@ -313,10 +313,15 @@ def init_configuration():
 			cfg['dbfilespec'] = cfg_file_data['database.filespec']
 		if 'logging.directory' in cfg_file_data:
 			cfg['logdir'] = cfg_file_data['logging.directory']
-		if 'logging.filespec' in cfg_file_data:
-			cfg['logfile'] = cfg_file_data['logging.filespec']
-		if 'logging.directory' in cfg_file_data:
-			cfg['logdir'] = cfg_file_data['logging.directory']
+
+		""" revoking ability to configure logfile """
+		#if 'logging.filespec' in cfg_file_data:
+		#	cfg['logfile'] = cfg_file_data['logging.filespec']
+		if not args['use'] == None:
+			cfg['logfile'] = "%s/%s_%s.log" % (cfg['logdir'],APPNAME,args['use'])
+		else:
+			cfg['logfile'] = "%s/%s.log" % (cfg['logdir'],APPNAME)
+
 		if 'logging.level' in cfg_file_data:
 			""" set cfg['loglevel'] to constant int value """
 			retval = convert_loglevstr_to_loglevint(cfg_file_data['logging.level'])
