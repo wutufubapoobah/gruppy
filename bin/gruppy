@@ -317,8 +317,8 @@ def init_configuration():
 		""" revoking ability to configure logfile """
 		#if 'logging.filespec' in cfg_file_data:
 		#	cfg['logfile'] = cfg_file_data['logging.filespec']
-		if not args['use'] == None:
-			cfg['logfile'] = "%s/%s_%s.log" % (cfg['logdir'],APPNAME,args['use'])
+		if not args.use == None:
+			cfg['logfile'] = "%s/%s_%s.log" % (cfg['logdir'],APPNAME,args.use)
 		else:
 			cfg['logfile'] = "%s/%s.log" % (cfg['logdir'],APPNAME)
 
@@ -413,11 +413,11 @@ def init():
 
 	atexit.register(exit_handler)
 
-	# set default configurable values
-	init_configuration()
-
 	# argparser
 	init_arguments()
+
+	# set default configurable values
+	init_configuration()
 
 	# set up logging
 	init_logging()

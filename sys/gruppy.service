@@ -7,7 +7,7 @@ User=root
 Group=root
 #EnvironmentFile=/etc/sysconfig/gruppy
 ExecStart=/bin/sh -c '/bin/gruppyd'
-ExecStop=/bin/sh -c '/bin/pkill -9 gruppy'
+ExecStop=/bin/sh -c "/bin/kill -9 $(ps -eo '%p %a'|grep gruppy|grep -v grep|awk '{print $1}'|xargs)"
 WorkingDirectory=/
 RemainAfterExit=yes
 
