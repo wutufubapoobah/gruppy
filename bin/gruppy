@@ -321,7 +321,7 @@ def init_configuration():
 			""" set cfg['loglevel'] to constant int value """
 			retval = convert_loglevstr_to_loglevint(cfg_file_data['logging.level'])
 			if not retval == logging.NOTSET:
-				cfg['loglevel'] == retval
+				cfg['loglevel'] = retval
 		if 'logstash.program' in cfg_file_data:
 			cfg['logstashbin'] = cfg_file_data['logstash.program']
 
