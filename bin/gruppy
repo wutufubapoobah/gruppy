@@ -251,10 +251,10 @@ class Feed(object):
 def exit_handler():
 	""" things to do before we go """
 
-        try:
-                os.remove(PIDFILE)
-        except:
-                pass
+	try:
+		os.remove(PIDFILE)
+	except Exception, e:
+		pass
 
 def init():
 	""" everything we want to do to prepare for success """
@@ -271,9 +271,18 @@ def init():
 	cfg['loglevel'] = 'info'
 	cfg['logstashbin'] = '/usr/share/logstash/bin/logstash'
 
+	config_read_succeeded = False
 	try:
-		with open('pyymltst.yml','r') as f:
+		with open(CFGFILE,'r') as f:
 			cfg_file_data = yaml.safe_load(f)
+			config_read_succeeded = True
+	except Exception, e:
+		msg = "unable to read configfile {%s}, proceeding with defaults\n" \
+			 % (CFGFILE,str(e))
+		warnings.warn(msg)
+		pass
+
+	if config_read_succeeded == True:
 		if 'database.filespec' in cfg_file_data:
 			cfg['dbfilespec'] = cfg_file_data['database.filespec']
 		if 'logging.directory' in cfg_file_data:
@@ -286,11 +295,6 @@ def init():
 			cfg['loglevel'] = cfg_file_data['logging.level']
 		if 'logstash.program' in cfg_file_data:
 			cfg['logstashbin'] = cfg_file_data['logstash.program']
-
-	except:
-		msg = "unable to read configfile {%s}, proceeding with defaults" % (CFGFILE)
-		warnings.warn(msg)
-		pass
 
 	# argparser
 	argparser = argparse.ArgumentParser(
@@ -313,16 +317,16 @@ def init():
 	if not os.path.isdir(logdir):
 		try:
 			os.mkdir(logdir)
-		except:
-			msg = "unable to create logdir"
+		except Exception, e:
+			msg = "unable to create logdir: %s" % (str(e))
 			print "%s" % (msg)
 
 	if not os.path.isfile(cfg['logfile']):
 		try:
 			with open(cfg['logfile'], 'a'):
 				os.utime(cfg['logfile'], None)
-		except:
-			msg = "unable to create logfile {%s}" % (cfg['logfile'])
+		except Exception, e:
+			msg = "unable to create logfile {%s}: %s" % (cfg['logfile'],str(e))
 			# can't log the error! should print this to stderr
 			print "%s" % (msg)
 
@@ -346,8 +350,9 @@ def init():
 		pidfile = open(PIDFILE, 'w')
 		pidfile.write(pid)
 		pidfile.close()
-	except:
-		msg = "unable to write process id {%s} to pidfile {%s}" % (pid,PIDFILE)
+	except Exception, e:
+		msg = "unable to write process id {%s} to pidfile {%s}: %s" \
+		  % (pid,PIDFILE, str(e))
 		logger.warning(msg)
     	#logger.warning("unable to write process id {%s} to pidfile {%s}" % (pid,PIDFILE))
 
@@ -586,8 +591,9 @@ def process_file(feed,filespec):
 		if dirname == '/tmp':
 			try:
 				os.remove(use_this_datafile)
-			except:
-				msg = "failed to remove transformed datafile %s" % (use_this_datafile)
+			except Exception, e:
+				msg = "failed to remove transformed datafile %s: %s" \
+				  % (use_this_datafile, str(e))
 				logger.warning(msg)
 		else:
 			msg = "expecting to remove transformed datafile in tempdir but datafile not tempfile: %s" % (use_this_datafile)
