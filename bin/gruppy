@@ -417,7 +417,7 @@ def init():
 	# set up logging
 	init_logging()
 
-	init_pidfle()
+	init_pidfile()
 
 	return
 
