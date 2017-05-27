@@ -23,7 +23,7 @@
 POLLING_INTERVAL=30
 
 db_cmd=sqlite3
-db_fil=/var/lib/gruppy.db
+db_fil=/var/lib/gruppy/gruppy.db
 db_qry='select name from logstash_input_feeds where enabled = 1'
 
 prog=gruppy
