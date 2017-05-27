@@ -294,7 +294,7 @@ def init_configuration():
 	cfg['dbfilespec'] = '/var/lib/%s/%s.db' % (PROGNAME,PROGNAME)
 	cfg['logdir'] = '/var/log/%s' % (PROGNAME)
 	cfg['logfile'] = '%s/%s.log' % (cfg['logdir'],PROGNAME)
-	cfg['loglevel'] = 'info'
+	cfg['loglevel'] = logging.INFO
 	cfg['logstashbin'] = '/usr/share/logstash/bin/logstash'
 
 	config_read_succeeded = False
