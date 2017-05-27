@@ -256,15 +256,41 @@ def exit_handler():
 	except Exception, e:
 		pass
 
-def init():
-	""" everything we want to do to prepare for success """
+def convert_loglevstr_to_loglevint(loglevstr):
+	""" returns logging.NOTSET if we fail to match string """
+
+	if loglevstr.lower() == "critical":
+		return logging.CRITICAL
+	if loglevstr.lower() == "error":
+		return logging.ERROR
+	if loglevstr.lower() == "warning":
+		return logging.WARNING
+	if loglevstr.lower() == "info":
+		return logging.INFO
+	if loglevstr.lower() == "debug":
+		return logging.DEBUG
+	return logging.NOTSET
+
+def convert_loglevint_to_loglevstr(loglevint):
+	""" if no match, returns None """
+
+	if loglevint == logging.CRITICAL:
+		return "critical"
+	if loglevint == logging.ERROR:
+		return "error"
+	if loglevint == logging.WARNING:
+		return "warning"
+	if loglevint == logging.INFO:
+		return "info"
+	if loglevint == logging.DEBUG:
+		return "debug"
+	if loglevint == logging.NOTSET:
+		return "notset"
+	return None
+
+def init_configuration():
 
 	global cfg
-	global logger
-	global args
-
-	atexit.register(exit_handler)
-	# set default configurable values
 	cfg['dbfilespec'] = '/var/lib/%s/%s.db' % (PROGNAME,PROGNAME)
 	cfg['logdir'] = '/var/log/%s' % (PROGNAME)
 	cfg['logfile'] = '%s/%s.log' % (cfg['logdir'],PROGNAME)
@@ -292,11 +318,18 @@ def init():
 		if 'logging.directory' in cfg_file_data:
 			cfg['logdir'] = cfg_file_data['logging.directory']
 		if 'logging.level' in cfg_file_data:
-			cfg['loglevel'] = cfg_file_data['logging.level']
+			""" set cfg['loglevel'] to constant int value """
+			retval = convert_loglevstr_to_loglevint(cfg_file_data['logging.level'])
+			if not retval == logging.NOTSET:
+				cfg['loglevel'] == retval
 		if 'logstash.program' in cfg_file_data:
 			cfg['logstashbin'] = cfg_file_data['logstash.program']
 
-	# argparser
+	return
+
+def init_args():
+
+	global args
 	argparser = argparse.ArgumentParser(
 		description="Realtime logstash input processing that supports S3")
 	argparser.add_argument("-i","--interval", type=int, 
@@ -311,7 +344,12 @@ def init():
 		action="store_true", default=False, help="disable logging and messages")
 	args = argparser.parse_args()
 
-	# set up logging
+	return
+
+def init_logger():
+
+	global logger
+
 	# if main logfile doesn't exist, create it
 	logdir = os.path.dirname(cfg['logfile'])
 	if not os.path.isdir(logdir):
@@ -332,10 +370,10 @@ def init():
 
 	# logfile = '/var/log/fetch_%s_data.log' % (feed.name)
 	logger = logging.getLogger(__name__)
-	logger.setLevel(logging.DEBUG)
+	logger.setLevel(cfg['loglevel'])
 	# create file handler for logging
 	handler = logging.FileHandler(cfg['logfile'])
-	handler.setLevel(logging.DEBUG)
+	handler.setLevel(cfg['loglevel'])
 	# create a logging format
 	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 	handler.setFormatter(formatter)
@@ -343,6 +381,15 @@ def init():
 	logger.addHandler(handler)
 	print "Logging to %s" % (cfg['logfile'])
 	logger.info("starting")
+	retval = convert_loglevint_to_loglevstr(logging.getLogger().getEffectiveLevel())
+	if not retval == None:
+		logger.info("log level: %s" % (retval))
+	else:
+		logger.info("log level: unknown")
+
+	return
+
+def init_pidfile():
 
 	# write pid to pidfile
 	pid = str(os.getpid())
@@ -354,7 +401,25 @@ def init():
 		msg = "unable to write process id {%s} to pidfile {%s}: %s" \
 		  % (pid,PIDFILE, str(e))
 		logger.warning(msg)
-    	#logger.warning("unable to write process id {%s} to pidfile {%s}" % (pid,PIDFILE))
+	return
+
+def init():
+	""" everything we want to do to prepare for success """
+
+	atexit.register(exit_handler)
+
+	# set default configurable values
+	init_configuration()
+
+	# argparser
+	init_arguments()
+
+	# set up logging
+	init_logging()
+
+	init_pidfle()
+
+	return
 
 def fetch_feeds():
 	""" return a dictionary of feeds in which key is feed name """
@@ -575,6 +640,11 @@ def process_file(feed,filespec):
 
 	elif args.more == False:
 		cmd = 'cat %s | %s -f %s >> %s' % (use_this_datafile, cfg['logstashbin'], feed.cfgfile, cmdlog)
+
+	# logically, we could get here if args.silent == True and args.more == True
+	# without building a command string!
+	elif args.silent == True and args.more == True:
+		raise Exception('unable to process request with both "silent" and "more" as command line arguments')
 
 	logger.debug("cmd: %s" % (cmd))
 	retval = subprocess.call(cmd, shell=True)
