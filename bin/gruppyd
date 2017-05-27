@@ -61,7 +61,7 @@ function runit()
 	do
 	    echo "Running in background: $prog -u $x -i $POLLING_INTERVAL"
 	    nohup $prog -u $x -i $POLLING_INTERVAL >/dev/null 2>/dev/null < /dev/null &
-	    echo "$!" > /var/run/guppy_${x}.pid
+	    echo "$!" > /var/run/gruppy_${x}.pid
 	done
 
 }

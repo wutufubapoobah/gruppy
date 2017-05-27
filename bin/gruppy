@@ -787,7 +787,7 @@ def run_once(feed_name):
 	# otherwise process single feed by name
 	feed = fetch_a_feed(args.use)
 	if feed == None:
-		msg = "No logstash input feed found in guppy db named %s" % (args.use)
+		msg = "No logstash input feed found in gruppy db named %s" % (args.use)
 		logger.error(msg)
 		print msg
 		sys.exit(1)
