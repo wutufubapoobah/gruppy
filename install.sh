@@ -14,13 +14,13 @@ if [[ ! $1 == 'y' && ! $1 == '-y' ]];then
  6. copy gruppy.service to /lib/systemd/system/
 
 EOF
+	read -p "Continue? [Y/n] " response
+	if [[ "$response" == "n" || "$response" == "N" ]];then
+		echo "Cancelled at user request"
+		exit 1;
+	fi
 fi
 
-read -p "Continue? [Y/n] " response
-if [[ "$response" == "n" || "$response" == "N" ]];then
-	echo "Cancelled at user request"
-	exit 1;
-fi
 
 mkdir /etc/gruppy
 cp etc/gruppy.yml /etc/gruppy
