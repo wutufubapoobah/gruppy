@@ -29,3 +29,4 @@ mkdir /var/lib/gruppy
 cp data/gruppy.db /var/lib/gruppy
 
 mkdir /var/log/gruppy
+cp sys/gruppy.service /lib/systemd/system/
