@@ -11,7 +11,8 @@ if [[ ! $1 == 'y' && ! $1 == '-y' ]];then
  3. create /var/lib/gruppy
  4. copy data/gruppy.db to /var/lib/gruppy
  5. create /var/log/gruppy
- 6. copy gruppy.service to /lib/systemd/system/
+ 6. copy sys/gruppy.service to /lib/systemd/system/
+ 7. copy bin/* to /bin/
 
 EOF
 	read -p "Continue? [Y/n] " response
@@ -30,3 +31,5 @@ cp data/gruppy.db /var/lib/gruppy
 
 mkdir /var/log/gruppy
 cp sys/gruppy.service /lib/systemd/system/
+
+cp bin/* /bin/
