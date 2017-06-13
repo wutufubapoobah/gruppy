@@ -51,12 +51,14 @@ import time
 import atexit
 import yaml
 import warnings
+import tempfile
+#import pprint
 
 __author__ = "Wutufubapoobah"
 __copyright__ = "Copyright 2017, Wutufubapoobah"
 __credits__ = ["Wutufubapoobah"]
 __license__ = "GPL"
-__version__ = "0.1.0"
+__version__ = "0.1.2"
 __maintainer__ = "utufubapoobah"
 __email__ = "wutufubapoobah@gmail.com"
 __status__ = "Development"
@@ -64,14 +66,25 @@ __status__ = "Development"
 # some useful constants
 APPNAME = 'gruppy'
 PROGNAME = '%s' % (APPNAME) # synonym
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 PIDFILE = '/var/run/%s.pid' % (APPNAME)
 CFGFILE = '/etc/%s/%s.yml' % (APPNAME,APPNAME)
+AWSBIN = '/root/.local/bin/aws' # should test existence in precondition check
+CTGZJSON2KVRECORDSBIN = '/bin/cvt-cloudtrail-gz-json-to-kv.py'
+# sleeptime in seconds
+SLEEPTIME = 2
+
+# feed type constants
+FT_UNKNOWN = 0
+FT_FILESYSTEM = 1
+FT_S3_VIA_AWSCLI = 2
 
 # a few globals: cfg, logger, args
 cfg = {}
 logger = None
 args = None
+
+#pp = pprint.PrettyPrinter(indent=4)
 
 class FSPath(object):
 	"""
@@ -130,13 +143,58 @@ class FSPath(object):
 		files_sorted_by_ctime = sorted(matches, key=os.path.getctime)
 		return files_sorted_by_ctime
 
+	def find_files_on_s3_via_awscli(self):
+		"""
+		Find files on s3 in target directory by calling 'aws s3 ls <path>'
+		where path is obtained through parameter substitution from self.path_template
+		e.b. 
+		aws s3 ls s3://hap-log-qa/hap-qa-cloudtrail/AWSLogs/011448383031/CloudTrail/us-east-1/2017/06/12/
+		"""
+		path = ''
+		if '$' in self.path_template:
+
+			# perform template parameter substitution on path
+			t = Template(self.path_template)
+			path = t.substitute(THIS_YEAR = datetime.now().year, 
+				THIS_MONTH = '%02d' % (datetime.now().month), 
+				THIS_DATE = '%02d' % (datetime.now().day))
+
+		else:
+			path = self.path_template
+
+		msg = "seeking files in path %s" % (path)
+		logger.info(msg)
+		# assert that aws is found at /root/.local/bin/aws
+		cmd = "%s s3 ls s3:/%s/" % (AWSBIN, path)
+		logger.info("cmd used to retrieve s3 filelist via awscli: %s" % (cmd))
+		try:
+			process = Popen(shlex.split(cmd), stdout=PIPE)
+			(output, err) = process.communicate()
+			exit_code = process.wait()
+		except Exception, e:
+			msg = "failed to retrieve s3 filelist via awscli: %s" % (str(e))
+			logger.error(msg)
+			return None
+
+		# otherwise output contains a string, split into list of lines
+		lines = output.splitlines()
+		# but we only care about filenames, which are final element of multicolumn line
+		filepaths = []
+		# columns are date, time, size, filename
+		for line in lines:
+			filepaths.append("%s/%s" % (path,line.split()[3]))
+
+		return filepaths
+
+
 class Feed(object):
 	"""
 	A Logstash input feed
 
 	Attributes:
 	 id - integer
-	 name 
+	 name - text
+	 type - integer (see the FT_<type> feed type constants!)
 	 config_filespec
 	 enabled - 0 (false) or 1 (true)
 	 transform - 0 (false) or 1 (true)
@@ -149,10 +207,11 @@ class Feed(object):
 	 When tranform == True, though, we copy input file to temp directory,
 	 apply the transformation, then input using the tranformed copy.
 	"""
-	def __init__(self,name,cfgfile,enabled,transform,transformation):
+	def __init__(self,name,cfgfile,enabled,transform,transformation,feedtype):
 		"""initialize the object"""
 
 		self.name = name
+		self.type = int(feedtype)
 		self.cfgfile = cfgfile
 		self.enabled = False # disabled by default
 		if enabled == 0:
@@ -167,14 +226,25 @@ class Feed(object):
 		self.transformation = transformation
 
 	def __repr__(self):
+		ftstr = ''
+		if self.type == FT_UNKNOWN:
+			ftstr = "unknown"
+		elif self.type == FT_FILESYSTEM:
+			ftstr = "filesystem"
+		elif self.type == FT_S3_VIA_AWSCLI:
+			ftstr = "s3-via-awscli"
+		else:
+			raise Exception("invalid feed type contant value: %s" % (self.type))
+
 		return """
 <%s:
  %-20s: %s
  %-20s: %s
+ %-20s: %s
  %-20s: %r
  %-20s: %r
  %-20s: %s
->""" % ("Feed","name",self.name,"cfgfile",self.cfgfile,"enabled?",
+>""" % ("Feed","name",self.name,"type", ftstr,"cfgfile",self.cfgfile,"enabled?",
 	self.enabled,"transform?",self.transform,"transformation",self.transformation)
 
 	def is_valid_config_file(self):
@@ -185,8 +255,9 @@ class Feed(object):
 		#sys.stdout.write("checking to see if %s has a valid config file, please wait ... " % (self.name))
 		#sys.stdout.flush()
 		#/usr/share/logstash/bin/logstash --path.settings /etc/logstash -f /usr/share/logstash/conf/elb-consolidated-logstash.conf -t
+		
 		logger.debug('%s --path.settings /etc/logstash -f %s -t' % (cfg['logstashbin'],self.cfgfile))
-		cmd = '%s --path.settings /etc/logstash -f %s -t' % (cfg['logstashbin'],self.cfgfile)
+		cmd = '%s --path.settings /etc/logstash --path.data %s -f %s -t' % (cfg['logstashbin'],cfg['tempdir'],self.cfgfile)
 		process = Popen(shlex.split(cmd), stdout=PIPE)
 		process.communicate()
 		exit_code = process.wait()
@@ -252,6 +323,11 @@ def exit_handler():
 	""" things to do before we go """
 
 	try:
+		os.removedirs(cfg['tempdir'])
+	except Exception, e:
+		pass
+
+	try:
 		os.remove(PIDFILE)
 	except Exception, e:
 		pass
@@ -303,7 +379,7 @@ def init_configuration():
 			cfg_file_data = yaml.safe_load(f)
 			config_read_succeeded = True
 	except Exception, e:
-		msg = "unable to read configfile {%s}, proceeding with defaults\n" \
+		msg = "unable to read configfile {%s}, proceeding with defaults: %s\n" \
 			 % (CFGFILE,str(e))
 		warnings.warn(msg)
 		pass
@@ -423,6 +499,12 @@ def init():
 	init_logging()
 
 	init_pidfile()
+
+	# create temporary directory used by this process
+	if os.path.isdir('/dev/shm'):
+		cfg['tempdir'] = tempfile.mkdtemp(dir='/dev/shm')
+	else:
+		cfg['tempdir'] = tempfile.mkdtemp()
 
 	return
 
@@ -606,9 +688,81 @@ def transform_input_data(filespec,transformation):
 	#print "tranformation complete"
 	return tempfile
 
+def copy_s3_file_to_tempdir_using_awscli(filespec):
+	""" returns tempfilespec on success, None on fail """
+	msg = "copying s3 file to tempdir using awscli"
+	logger.debug(msg)
+
+	tempfile = '/tmp/%s' % (os.path.basename(filespec))
+	cmd = '%s s3 cp s3:/%s %s' % (AWSBIN,filespec,tempfile)
+	logger.debug("cmd: %s" % (cmd))
+	exit_code = 0
+	try:
+		process = Popen(shlex.split(cmd), stdout=PIPE)
+		process.communicate()
+		exit_code = process.wait()
+	except Exception,e:
+		msg = "failed to copy s3 file via aws cli %s: %s" % (filespec,str(e))
+		logger.error(msg)
+	# send newline
+	#print
+	if exit_code != 0:
+		# if tempfile exists, should verify integrity via checksum
+		# if exists and checksum matches, okay, ignore exit code
+		# if tempfile exists and checksums don't match, raise warning
+		msg = "copy s3 file via aws cli returned a non-zero value"
+		logger.warning(msg)
+		#print "transformation returned a non-zero value"
+		return None
+
+	return tempfile
+
+def process_s3_file_using_awscli(feed,filespec):
+	""" 
+	Not supporting transformations currently on s3 via awscli
+	1. aws s3 cp s3://path $tempfile
+	2. run this command => CTGZJSON2KVRECORDSBIN $tempfile | logstash -f feed.cfgfile 
+	"""
+	msg = "using the %s feed to process s3 file %s via awscli, please wait ... " % (feed.name,filespec)
+	logger.info(msg)
+
+	tempfile = copy_s3_file_to_tempdir_using_awscli(filespec)
+	if tempfile == None:
+		msg = "copy_s3_file_to_tempdir_using_awscli returned None, cannot continue"
+		logger.error(msg)
+		return None
+
+	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
+	logger.info('command output is being written to %s' % (cmdlog))
+	cmd = '%s %s | %s --path.settings %s --path.data %s -f %s >> %s 2>&1' \
+	   % (CTGZJSON2KVRECORDSBIN, tempfile, cfg['logstashbin'], '/etc/logstash', cfg['tempdir'], feed.cfgfile, cmdlog)
+
+	logger.debug('cmd: %s' % (cmd))
+	retval = 0
+	try:
+		retval = subprocess.call(cmd, shell=True)
+
+	except Exception,e:
+		msg = "failed to logstash %s using %s: %s" % (tempfile, CTGZJSON2KVRECORDSBIN, str(e))
+		logger.error(msg)
+		return False
+	# send newline
+	#print
+	if retval != 0:
+		msg = "external command to process file returned a non-zero value: %s" % (cmd)
+		logger.warning(msg)
+		#print "transformation returned a non-zero value"
+		#return False
+
+	# otherwise success, delete tempfile and update the database
+	os.remove(tempfile)
+	return True
 
 def process_file(feed,filespec):
 	""" cat <inputfile> | <logstash-program> -f <feed-configfile> """
+
+	if feed.type == FT_S3_VIA_AWSCLI:
+		return process_s3_file_using_awscli(feed,filespec)
 
 	msg = "using the %s feed to process %s, please wait ... " % (feed.name,filespec)
 	logger.info(msg)
@@ -640,11 +794,12 @@ def process_file(feed,filespec):
 	logger.info('command output is being written to %s' % (cmdlog))
 
 	if args.silent == False and args.more == True:
-		cmd = 'cat %s | %s --path.settings /etc/logstash -f %s >> %s' \
-		% (use_this_datafile, cfg['logstashbin'], feed.cfgfile, cmdlog)
+		cmd = 'cat %s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
+		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
 
 	elif args.more == False:
-		cmd = 'cat %s | %s -f %s >> %s' % (use_this_datafile, cfg['logstashbin'], feed.cfgfile, cmdlog)
+		cmd = 'cat %s | %s --path.data %s -f %s >> %s' \
+		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
 
 	# logically, we could get here if args.silent == True and args.more == True
 	# without building a command string!
@@ -745,7 +900,14 @@ def process_feed(feed):
 		# is the path blacklisted? if so, skip
 		logger.debug("processing path: %s" % (p))
 		# 2.1. generate a list of all filespecs for files that match the pattern
-		files = p.find_files()
+		if feed.type == FT_FILESYSTEM:
+			files = p.find_files()
+		elif feed.type == FT_S3_VIA_AWSCLI:
+			files = p.find_files_on_s3_via_awscli()
+		# otherwise, unsupported
+		else:
+			raise Exception("unrecognized feed type: %d" % (feed.type))
+
 		logger.info("found files for path")
 		logger.debug(files)
 
@@ -759,7 +921,10 @@ def process_feed(feed):
 
 			# otherwise process the file
 			# arguments to 'process_file' are a feed and a filespec
-			retval = process_file(feed,f)
+			if feed.type == FT_FILESYSTEM:
+				retval = process_file(feed,f)
+			elif feed.type == FT_S3_VIA_AWSCLI:
+				retval = process_s3_file_using_awscli(feed,f)
 			# be sure to check the return value
 			# returns True on success, False (or None) on fail
 			if retval == True:
@@ -779,8 +944,8 @@ def run_once(feed_name):
 	if feed_name == None:
 		# process all enabled feeds
 		feeds = fetch_feeds()
-		for n in feeds:
-			process_feed(feeds[n])
+		for k,feed in feeds.iteritems():
+			process_feed(feed)
 
 		return
 
