@@ -186,6 +186,49 @@ class FSPath(object):
 
 		return filepaths
 
+class FeedFilter(object):
+	"""
+	A FeedFilter object
+
+	Attributes:
+	 name - string
+	 negate - boolean
+	 grep_regex_pattern - string
+	 feed_name - string
+	 enabled - boolean
+	"""
+	def __init__(self,name,negate,grep_regex_pattern,feed_name,enabled):
+
+		self.name = name
+		self.negate = negate
+		self.grep_regex_pattern = grep_regex_pattern
+		self.feed_name = feed_name
+		self.enabled = enabled
+
+	def __repr__(self):
+
+		if self.negate == False:
+			negate_me = "False"
+		else:
+			negate_me = "True"
+		if self.enabled == False:
+			enable_me = "False"
+		else:
+			enable_me = "True"
+		return """
+<%s:
+ %-20s: %s
+ %-20s: %s
+ %-20s: %s
+ %-20s: %s
+ %-20s: %s
+>""" % (
+	"FeedFilter",
+	"name",self.name,
+	"regex pattern",self.grep_regex_pattern,
+	"feed name",self.feed_name,
+	"negate?",negate_me,
+	"enabled?",enable_me)		
 
 class Feed(object):
 	"""
@@ -224,6 +267,7 @@ class Feed(object):
 		if transform == 1:
 			self.transform = True
 		self.transformation = transformation
+		self.filters = []
 
 	def __repr__(self):
 		ftstr = ''
@@ -318,6 +362,40 @@ class Feed(object):
 		conn.close()
 
 		return interesting_paths
+
+	def fetch_filters(self):
+		""" return a dictionary of filters in which key is the filter name """
+		try:
+			conn = sqlite3.connect(cfg['dbfilespec'])
+		except Exception, e:
+			print "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
+			return None
+		c = conn.cursor()
+		sql = "SELECT f.name,f.negate,f.grep_regex_pattern,x.feed_name,x.enabled FROM feed_x_filter AS x,filters AS f WHERE x.feed_name = '%s' and x.filter_name = f.name" % (self.name)" % (self.name)
+		try:
+			c.execute(sql)
+		except Exception, e:
+			print "Execute fail on db %s for query %s: %s" % (cfg['dbfilespec'],sql,str(e))
+			conn.close()
+			return None
+		# fetchall returns a list of tuples
+		rows = []
+		try:
+			rows = c.fetchall()
+		except Exception, e:
+			print "Fetchall fail on db %s for query %s: %s" % (cfg['dbfilespec'],query_get_feeds,str(e))
+			conn.close()
+			return None
+
+		filters = {}
+		for r in rows:
+			filter_name = r[0]
+			arglist = list(r)
+			filters[filter_name] = FeedFilter(*arglist)
+		conn.close()
+		logger.debug(filters)
+		self.filters = filters
+		return filters
 
 def exit_handler():
 	""" things to do before we go """
@@ -545,6 +623,7 @@ def fetch_feeds():
 		feed_name = r[0]
 		arglist = list(r)
 		feeds[feed_name] = Feed(*arglist)
+		feeds[feed_name].fetch_filters()
 
 	conn.close()
 	logger.debug(feeds)
@@ -595,7 +674,11 @@ def fetch_a_feed(feed_name):
 
 	conn.close()
 	logger.debug(obj)
+
+	# fetch feed's filter(s)
+	obj.fetch_filters()
 	return obj
+
 
 def file_already_processed(filespec):
 	""" determine whether file was already processed, return T/F (on error, return None) """
