@@ -661,6 +661,13 @@ def file_already_processed(filespec):
 def transform_input_data(filespec,transformation):
 	""" transform file before using it as input """
 
+	# verify that transformation is a file that exists
+	if not os.path.exists(transformation):
+		logger.error("transformation external program not found: %s" % (transformation))
+		return None
+
+	# and is executable
+
 	# ideally, we'd safely and securely create tempfile using python tempfile module
 	# for the sake of velocity and to simplify diagnostics and troubleshooting,
 	# we're going to use original filename for now.
@@ -668,13 +675,20 @@ def transform_input_data(filespec,transformation):
 	copyfile(filespec, tempfile)
 
 	# now apply transformation
-	msg = "applying transformation, please wait ... "
+	#msg = "applying transformation, please wait ... "
 	#sys.stdout.write("applying transformation, please wait ... ")
 	#sys.stdout.flush()
 	cmd = '%s %s' % (transformation,tempfile)
-	process = Popen(shlex.split(cmd), stdout=PIPE)
-	process.communicate()
-	exit_code = process.wait()
+	logger.info("transformation: %s" % (cmd))
+	exit_code = -1
+	try:
+		process = Popen(shlex.split(cmd), stdout=PIPE)
+		process.communicate()
+		exit_code = process.wait()
+	except Exception, e:
+		msg = "failed to transform feed file: %s" % (str(e))
+		logger.error(msg)
+
 	# send newline
 	#print
 	if exit_code != 0:
@@ -683,7 +697,7 @@ def transform_input_data(filespec,transformation):
 		#print "transformation returned a non-zero value"
 		return None
 
-	msg = "tranformation complete"
+	msg = "transformation complete"
 	logger.info(msg)
 	#print "tranformation complete"
 	return tempfile
@@ -767,7 +781,7 @@ def preprocess_feed_file_as_required(feed,filespec):
 		retval = transform_input_data(filespec,feed.transformation)
 		if retval == None:
 			msg = "transformation failed, skipping data file %s" % (filespec)
-			logger.warning(msg)
+			logger.error(msg)
 			#warnings.warn("\n%s" % (msg))
 			return False
 		# if retval not None, it should be tempfile
