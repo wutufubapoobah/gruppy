@@ -371,7 +371,7 @@ class Feed(object):
 			print "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
 			return None
 		c = conn.cursor()
-		sql = "SELECT f.name,f.negate,f.grep_regex_pattern,x.feed_name,x.enabled FROM feed_x_filter AS x,filters AS f WHERE x.feed_name = '%s' and x.filter_name = f.name" % (self.name)" % (self.name)
+		sql = "SELECT f.name,f.negate,f.grep_regex_pattern,x.feed_name,x.enabled FROM feed_x_filter AS x,filters AS f WHERE x.feed_name = '%s' and x.filter_name = f.name" % (self.name)
 		try:
 			c.execute(sql)
 		except Exception, e:
@@ -902,17 +902,26 @@ def postprocess_feed_file_as_required(feed,filespec):
 def build_command_for_processing_feed_file(feed,use_this_datafile):
 	""" build command string for processing a feed file """
 
-	cmd = None
+	# base command
+	cmd = 'cat -v %s' % use_this_datafile
 	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
 	logger.info('command output is being written to %s' % (cmdlog))
 
+	for filter_name,filter_object in feed.filters.iteritems():
+		if filter_object.negate == True:
+			 cmd = "%s | grep -v '%s'" % (cmd,filter_object.grep_regex_pattern)
+		elif filter_object.negate == False:
+			 cmd = "%s | grep '%s'" % (cmd,filter_object.grep_regex_pattern)
+		else:
+			raise Exception('bad filter negation value, should be boolean')
+
 	if args.silent == False and args.more == True:
-		cmd = 'cat -v %s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
-		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
+		cmd = '%s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
+		% (cmd, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
 
 	elif args.more == False:
-		cmd = 'cat -v %s | %s --path.data %s -f %s >> %s' \
-		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
+		cmd = '%s | %s --path.data %s -f %s >> %s' \
+		% (cmd, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
 
 	# logically, we could get here if args.silent == True and args.more == True
 	# without building a command string!
