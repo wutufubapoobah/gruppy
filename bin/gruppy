@@ -207,7 +207,7 @@ class Feed(object):
 	 When tranform == True, though, we copy input file to temp directory,
 	 apply the transformation, then input using the tranformed copy.
 	"""
-	def __init__(self,name,cfgfile,enabled,transform,transformation,feedtype):
+	def __init__(self,name,feedtype,cfgfile,enabled,transform,transformation):
 		"""initialize the object"""
 
 		self.name = name
@@ -758,19 +758,10 @@ def process_s3_file_using_awscli(feed,filespec):
 	os.remove(tempfile)
 	return True
 
-def process_file(feed,filespec):
-	""" cat <inputfile> | <logstash-program> -f <feed-configfile> """
-
-	if feed.type == FT_S3_VIA_AWSCLI:
-		return process_s3_file_using_awscli(feed,filespec)
-
-	msg = "using the %s feed to process %s, please wait ... " % (feed.name,filespec)
-	logger.info(msg)
-	#sys.stdout.write("using the %s feed to process %s, please wait ... " % (feed.name,filespec))
-	#sys.stdout.flush()
-
-	# if feed.transform == True, 
-	# then (1) copy data file to tempdir, (2) transform the copy, (3) update using the transformed copy
+def preprocess_feed_file_as_required(feed,filespec):
+	""" preprocess the feed file as required 
+	returns filespec of file to be processed
+	"""
 	use_this_datafile = filespec 
 	if feed.transform == True:
 		retval = transform_input_data(filespec,feed.transformation)
@@ -787,33 +778,12 @@ def process_file(feed,filespec):
 		msg = "data file missing, unable to process it: %s" % (use_this_datafile)
 		logger.warning(msg)
 		#warnings.warn("\n%s" % (msg))
-		return False
+		return None
 
-	cmd = None
-	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
-	logger.info('command output is being written to %s' % (cmdlog))
+	return use_this_datafile
 
-	if args.silent == False and args.more == True:
-		cmd = 'cat %s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
-		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
-
-	elif args.more == False:
-		cmd = 'cat %s | %s --path.data %s -f %s >> %s' \
-		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
-
-	# logically, we could get here if args.silent == True and args.more == True
-	# without building a command string!
-	elif args.silent == True and args.more == True:
-		raise Exception('unable to process request with both "silent" and "more" as command line arguments')
-
-	logger.debug("cmd: %s" % (cmd))
-	retval = subprocess.call(cmd, shell=True)
-	logger.debug("finished processing file")
-	if retval != 0:
-		msg = "file processing failure, command returned nonzero value %d" % (retval)
-		logger.error(msg)
-		#print "file processing failure"
-		return False
+def postprocess_feed_file_as_required(feed,filespec):
+	""" postprocess the feed file as required """
 
 	if feed.transform == True:
 		# before removing, make sure it's tempfile, NOT original!
@@ -830,8 +800,61 @@ def process_file(feed,filespec):
 			logger.warning(msg)
 			#warnings.warn("\n%s" % (msg))
 
-		# need to update the 'files_successfully_processed' table in the database
-		# let the caller do that; make sure caller checks return code and follows up
+	return		
+
+def build_command_for_processing_feed_file(feed,use_this_datafile):
+	""" build command string for processing a feed file """
+
+	cmd = None
+	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
+	logger.info('command output is being written to %s' % (cmdlog))
+
+	if args.silent == False and args.more == True:
+		cmd = 'cat -v %s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
+		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
+
+	elif args.more == False:
+		cmd = 'cat -v %s | %s --path.data %s -f %s >> %s' \
+		% (use_this_datafile, cfg['logstashbin'], cfg['tempdir'], feed.cfgfile, cmdlog)
+
+	# logically, we could get here if args.silent == True and args.more == True
+	# without building a command string!
+	elif args.silent == True and args.more == True:
+		raise Exception('unable to process request with both "silent" and "more" as command line arguments')
+
+	logger.debug("cmd: %s" % (cmd))
+	return cmd
+
+def process_file(feed,filespec):
+	""" cat <inputfile> | <logstash-program> -f <feed-configfile> """
+
+	if feed.type == FT_S3_VIA_AWSCLI:
+		return process_s3_file_using_awscli(feed,filespec)
+
+	msg = "using the %s feed to process %s, please wait ... " % (feed.name,filespec)
+	logger.info(msg)
+	#sys.stdout.write("using the %s feed to process %s, please wait ... " % (feed.name,filespec))
+	#sys.stdout.flush()
+
+	# if feed.transform == True, 
+	# then (1) copy data file to tempdir, (2) transform the copy, (3) update using the transformed copy
+	use_this_datafile = preprocess_feed_file_as_required(feed,filespec)
+	if use_this_datafile == None:
+		return False
+
+	cmd = build_command_for_processing_feed_file(feed,filespec)
+	logger.debug("cmd: %s" % (cmd))
+	retval = subprocess.call(cmd, shell=True)
+	logger.debug("finished processing file")
+	if retval != 0:
+		msg = "file processing failure, command returned nonzero value %d" % (retval)
+		logger.error(msg)
+		#print "file processing failure"
+		return False
+
+	postprocess_feed_file_as_required(feed,filespec)
+	# need to update the 'files_successfully_processed' table in the database
+	# let the caller do that; make sure caller checks return code and follows up
 
 	return True
 
@@ -874,57 +897,78 @@ def brag_about_success(feed,filespec):
 	conn.close()
 	return True
 
-def process_feed(feed):
-	""" fetch interesting paths associated with feed from db, then process those """
+def is_valid_enabled_feed(feed):
+	""" verify that feed is enabled and has a valid config file """
+	logger.debug("verifying that feed {%s} is enabled and has a valid config file" % (feed.name))
 
-	logger.info("processing feed %s" % (feed.name))
 	# if feed is not enabled, ignore it
 	if not feed.enabled == True:
 		msg = "skipping disabled feed %s" % (feed.name)
 		logger.info(msg)
-		return
+		return False
 
 	# 1. verify that the config file is valid
 	if not feed.is_valid_config_file():
 		msg = 'input feed %s has invalid config file %s' % (feed.name,feed.cfgfile)
 		logger.warning(msg)
 		#warnings.warn(msg)
+		return False
+
+	return True
+
+def find_files_by_feed_and_path(feed,p):
+	""" find feed files by feed and path """
+
+	logger.debug("finding files for feed {%s} (feed type: %d) using path {%s}" \
+		% (feed.name,feed.type,p))
+	# 2.1. generate a list of all filespecs for files that match the pattern
+	if feed.type == FT_FILESYSTEM:
+		files = p.find_files()
+	elif feed.type == FT_S3_VIA_AWSCLI:
+		files = p.find_files_on_s3_via_awscli()
+	# otherwise, unsupported
+	else:
+		raise Exception("unrecognized feed type: %d" % (feed.type))
+
+	logger.info("found files for path")
+	logger.debug(files)
+	return files
+
+def process_feed_file(feed,f):
+	""" process a feed file according to the feed type """
+
+	# arguments to 'process_file' are a feed and a filespec
+	if feed.type == FT_FILESYSTEM:
+		return process_file(feed,f)
+	elif feed.type == FT_S3_VIA_AWSCLI:
+		return process_s3_file_using_awscli(feed,f)
+	# otherwise, unsupported
+	else:
+		raise Exception("unrecognized feed type: %d" % (feed.type))
+
+	return None
+
+def process_feed(feed):
+	""" fetch interesting paths associated with feed from db, then process those """
+
+	logger.info("processing feed %s" % (feed.name))
+	if not is_valid_enabled_feed(feed):
 		return
 
-	# 2. fetch the list of interesting paths associated with this feed
-	interesting_paths = feed.fetch_interesting_paths()
-	logger.debug(interesting_paths)
-
 	# 2. for each interesting path associated with this feed,
-	for p in interesting_paths:
+	for p in feed.fetch_interesting_paths():
 		# is the path blacklisted? if so, skip
-		logger.debug("processing path: %s" % (p))
-		# 2.1. generate a list of all filespecs for files that match the pattern
-		if feed.type == FT_FILESYSTEM:
-			files = p.find_files()
-		elif feed.type == FT_S3_VIA_AWSCLI:
-			files = p.find_files_on_s3_via_awscli()
-		# otherwise, unsupported
-		else:
-			raise Exception("unrecognized feed type: %d" % (feed.type))
-
-		logger.info("found files for path")
-		logger.debug(files)
-
+		logger.debug("processing interesting path: %s" % (p))
 		# 2.1.1. for each file within the interesting path that match the pattern,
-		for f in files:
+		for f in find_files_by_feed_and_path(feed,p):
+			logger.debug("processing data file")
 			# 2.1.1.1. check in db to see if the file has already been processed 
 			if file_already_processed(f):
 				# if it has, ignore and continue
 				logger.info("skipping already processed file: %s" % (f))
 				continue
-
 			# otherwise process the file
-			# arguments to 'process_file' are a feed and a filespec
-			if feed.type == FT_FILESYSTEM:
-				retval = process_file(feed,f)
-			elif feed.type == FT_S3_VIA_AWSCLI:
-				retval = process_s3_file_using_awscli(feed,f)
+			retval = process_feed_file(feed,f)
 			# be sure to check the return value
 			# returns True on success, False (or None) on fail
 			if retval == True:
