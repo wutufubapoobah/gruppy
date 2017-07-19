@@ -79,6 +79,10 @@ FT_UNKNOWN = 0
 FT_FILESYSTEM = 1
 FT_S3_VIA_AWSCLI = 2
 
+FILTER_TYPE_UNKNOWN = 0
+FILTER_TYPE_GREP = 1
+FILTER_TYPE_SED = 2
+
 # a few globals: cfg, logger, args
 cfg = {}
 logger = None
@@ -192,16 +196,18 @@ class FeedFilter(object):
 
 	Attributes:
 	 name - string
+	 filter_type - integer
 	 negate - boolean
-	 grep_regex_pattern - string
+	 pattern - string
 	 feed_name - string
 	 enabled - boolean
 	"""
-	def __init__(self,name,negate,grep_regex_pattern,feed_name,enabled):
+	def __init__(self,name,filter_type,negate,pattern,feed_name,enabled):
 
 		self.name = name
+		self.filter_type = filter_type
 		self.negate = negate
-		self.grep_regex_pattern = grep_regex_pattern
+		self.pattern = pattern
 		self.feed_name = feed_name
 		self.enabled = enabled
 
@@ -222,10 +228,12 @@ class FeedFilter(object):
  %-20s: %s
  %-20s: %s
  %-20s: %s
+ %-20s: %s
 >""" % (
 	"FeedFilter",
 	"name",self.name,
-	"regex pattern",self.grep_regex_pattern,
+	"filter type",self.filter_type,
+	"pattern",self.pattern,
 	"feed name",self.feed_name,
 	"negate?",negate_me,
 	"enabled?",enable_me)		
@@ -371,7 +379,7 @@ class Feed(object):
 			print "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
 			return None
 		c = conn.cursor()
-		sql = "SELECT f.name,f.negate,f.grep_regex_pattern,x.feed_name,x.enabled FROM feed_x_filter AS x,filters AS f WHERE x.feed_name = '%s' and x.filter_name = f.name" % (self.name)
+		sql = "SELECT f.name,f.filter_type,f.negate,f.pattern,x.feed_name,x.enabled FROM feed_x_filter AS x,filters AS f WHERE x.feed_name = '%s' and x.filter_name = f.name" % (self.name)
 		try:
 			c.execute(sql)
 		except Exception, e:
@@ -908,12 +916,19 @@ def build_command_for_processing_feed_file(feed,use_this_datafile):
 	logger.info('command output is being written to %s' % (cmdlog))
 
 	for filter_name,filter_object in feed.filters.iteritems():
-		if filter_object.negate == True:
-			 cmd = "%s | grep -v '%s'" % (cmd,filter_object.grep_regex_pattern)
-		elif filter_object.negate == False:
-			 cmd = "%s | grep '%s'" % (cmd,filter_object.grep_regex_pattern)
+		if filter_object.filter_type == FILTER_TYPE_GREP:
+			if filter_object.negate == True:
+				 cmd = "%s | grep -v '%s'" % (cmd,filter_object.pattern)
+			elif filter_object.negate == False:
+				 cmd = "%s | grep '%s'" % (cmd,filter_object.pattern)
+			else:
+				raise Exception('bad filter negation value, should be boolean')
+
+
+		elif filter_object.filter_type == FILTER_TYPE_SED:
+			 cmd = "%s | sed '%s'" % (cmd,filter_object.pattern)
 		else:
-			raise Exception('bad filter negation value, should be boolean')
+			raise Exception('bad filter type {%d}, should be 1 (grep) or 2 sed)' % (filter_object.filter_type))			
 
 	if args.silent == False and args.more == True:
 		cmd = '%s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
