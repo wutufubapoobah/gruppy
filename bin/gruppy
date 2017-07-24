@@ -846,7 +846,7 @@ def process_s3_file_using_awscli(feed,filespec):
 	if use_this_datafile == None:
 		return False
 
-	cmd = build_command_for_processing_feed_file(use_this_datafile)
+	cmd = build_command_for_processing_feed_file(feed,use_this_datafile)
 	logger.debug("cmd: %s" % (cmd))
 	retval = subprocess.call(cmd, shell=True)
 	logger.debug("finished processing file")
