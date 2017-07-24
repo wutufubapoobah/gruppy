@@ -78,6 +78,7 @@ SLEEPTIME = 2
 FT_UNKNOWN = 0
 FT_FILESYSTEM = 1
 FT_S3_VIA_AWSCLI = 2
+FT_S3_AWS_GZJSON = 3
 
 FILTER_TYPE_UNKNOWN = 0
 FILTER_TYPE_GREP = 1
@@ -285,6 +286,8 @@ class Feed(object):
 			ftstr = "filesystem"
 		elif self.type == FT_S3_VIA_AWSCLI:
 			ftstr = "s3-via-awscli"
+		elif self.type == FT_S3_AWS_GZJSON:
+			ftstr = "s3-gz-aws-json2kv"
 		else:
 			raise Exception("invalid feed type contant value: %s" % (self.type))
 
@@ -837,6 +840,45 @@ def process_s3_file_using_awscli(feed,filespec):
 		logger.error(msg)
 		return None
 
+	# if feed.transform == True, 
+	# then (1) copy data file to tempdir, (2) transform the copy, (3) update using the transformed copy
+	use_this_datafile = preprocess_feed_file_as_required(feed,tempfile)
+	if use_this_datafile == None:
+		return False
+
+	cmd = build_command_for_processing_feed_file(use_this_datafile)
+	logger.debug("cmd: %s" % (cmd))
+	retval = subprocess.call(cmd, shell=True)
+	logger.debug("finished processing file")
+	if retval != 0:
+		msg = "file processing failure, command returned nonzero value %d" % (retval)
+		logger.error(msg)
+		#print "file processing failure"
+		return False
+
+	postprocess_feed_file_as_required(feed,use_this_datafile)
+	# need to update the 'files_successfully_processed' table in the database
+	# let the caller do that; make sure caller checks return code and follows up
+
+	# otherwise success, delete tempfile and update the database
+	os.remove(tempfile)
+	return True
+
+def process_s3_gzfile_using_aws_json2kv(feed,filespec):
+	""" 
+	Not supporting transformations currently on s3 via awscli
+	1. aws s3 cp s3://path $tempfile
+	2. run this command => CTGZJSON2KVRECORDSBIN $tempfile | logstash -f feed.cfgfile 
+	"""
+	msg = "using the %s feed to process s3 file %s via awscli, please wait ... " % (feed.name,filespec)
+	logger.info(msg)
+
+	tempfile = copy_s3_file_to_tempdir_using_awscli(filespec)
+	if tempfile == None:
+		msg = "copy_s3_file_to_tempdir_using_awscli returned None, cannot continue"
+		logger.error(msg)
+		return None
+
 	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
 	logger.info('command output is being written to %s' % (cmdlog))
 	cmd = '%s %s | %s --path.settings %s --path.data %s -f %s >> %s 2>&1' \
@@ -951,6 +993,8 @@ def process_file(feed,filespec):
 
 	if feed.type == FT_S3_VIA_AWSCLI:
 		return process_s3_file_using_awscli(feed,filespec)
+	elif feed.type == FT_S3_AWS_GZJSON:
+		return process_s3_gzfile_using_aws_json2kv(feed,f)
 
 	msg = "using the %s feed to process %s, please wait ... " % (feed.name,filespec)
 	logger.info(msg)
@@ -963,7 +1007,7 @@ def process_file(feed,filespec):
 	if use_this_datafile == None:
 		return False
 
-	cmd = build_command_for_processing_feed_file(feed,filespec)
+	cmd = build_command_for_processing_feed_file(feed,use_this_datafile)
 	logger.debug("cmd: %s" % (cmd))
 	retval = subprocess.call(cmd, shell=True)
 	logger.debug("finished processing file")
@@ -973,7 +1017,7 @@ def process_file(feed,filespec):
 		#print "file processing failure"
 		return False
 
-	postprocess_feed_file_as_required(feed,filespec)
+	postprocess_feed_file_as_required(feed,use_this_datafile)
 	# need to update the 'files_successfully_processed' table in the database
 	# let the caller do that; make sure caller checks return code and follows up
 
@@ -1045,7 +1089,7 @@ def find_files_by_feed_and_path(feed,p):
 	# 2.1. generate a list of all filespecs for files that match the pattern
 	if feed.type == FT_FILESYSTEM:
 		files = p.find_files()
-	elif feed.type == FT_S3_VIA_AWSCLI:
+	elif feed.type == FT_S3_VIA_AWSCLI or feed.type == FT_S3_AWS_GZJSON:
 		files = p.find_files_on_s3_via_awscli()
 	# otherwise, unsupported
 	else:
@@ -1063,6 +1107,8 @@ def process_feed_file(feed,f):
 		return process_file(feed,f)
 	elif feed.type == FT_S3_VIA_AWSCLI:
 		return process_s3_file_using_awscli(feed,f)
+	elif feed.type == FT_S3_AWS_GZJSON:
+		return process_s3_gzfile_using_aws_json2kv(feed,f)
 	# otherwise, unsupported
 	else:
 		raise Exception("unrecognized feed type: %d" % (feed.type))
