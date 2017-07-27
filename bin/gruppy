@@ -251,6 +251,7 @@ class Feed(object):
 	 enabled - 0 (false) or 1 (true)
 	 transform - 0 (false) or 1 (true)
 	 transformation
+	 convert_slow_query_format - 0 (false) or 1 (true)
 
 	 Note: transformation is defined as an external command, script or program that 
 	 would be run with the data file as sole argument. 
@@ -259,7 +260,7 @@ class Feed(object):
 	 When tranform == True, though, we copy input file to temp directory,
 	 apply the transformation, then input using the tranformed copy.
 	"""
-	def __init__(self,name,feedtype,cfgfile,enabled,transform,transformation):
+	def __init__(self,name,feedtype,cfgfile,enabled,transform,transformation,convert_slow_query_format):
 		"""initialize the object"""
 
 		self.name = name
@@ -276,6 +277,9 @@ class Feed(object):
 		if transform == 1:
 			self.transform = True
 		self.transformation = transformation
+		self.convert_slow_query_format = False
+		if convert_slow_query_format == 1:
+			self.convert_slow_query_format = True
 		self.filters = []
 
 	def __repr__(self):
@@ -291,16 +295,21 @@ class Feed(object):
 		else:
 			raise Exception("invalid feed type contant value: %s" % (self.type))
 
+		slow_query_string = "false"
+		if self.convert_slow_query_format == True:
+			slow_query_string = "true"
+
 		return """
 <%s:
  %-20s: %s
  %-20s: %s
  %-20s: %s
  %-20s: %r
+ %-20s: %s
  %-20s: %r
  %-20s: %s
 >""" % ("Feed","name",self.name,"type", ftstr,"cfgfile",self.cfgfile,"enabled?",
-	self.enabled,"transform?",self.transform,"transformation",self.transformation)
+	self.enabled,"convert_slow_query_format?",slow_query_string,"transform?",self.transform,"transformation",self.transformation)
 
 	def is_valid_config_file(self):
 		""" verify that self.cfgfile is a valid logstash config file """
@@ -957,20 +966,25 @@ def build_command_for_processing_feed_file(feed,use_this_datafile):
 	cmdlog = '%s/fetch_%s_data.log' % (cfg['logdir'],feed.name)
 	logger.info('command output is being written to %s' % (cmdlog))
 
-	for filter_name,filter_object in feed.filters.iteritems():
-		if filter_object.filter_type == FILTER_TYPE_GREP:
-			if filter_object.negate == True:
-				 cmd = "%s | grep -v '%s'" % (cmd,filter_object.pattern)
-			elif filter_object.negate == False:
-				 cmd = "%s | grep '%s'" % (cmd,filter_object.pattern)
+	# you can either use filters OR use mysql slow query format conversion, NOT BOTH
+	if feed.convert_slow_query_format == True:
+		conversion_string = """  grep -v '^\(/rdsdbbin\|Tcp port: \|Time  \)' |perl -nae 'chomp();if ($_ !~ /^# Time: /){ print " $_";} else { print "\n\n","$_"; };END {print "\n\n";}' """
+		cmd = '%s | %s' % (conversion_string)
+	else:
+		for filter_name,filter_object in feed.filters.iteritems():
+			if filter_object.filter_type == FILTER_TYPE_GREP:
+				if filter_object.negate == True:
+					 cmd = "%s | grep -v '%s'" % (cmd,filter_object.pattern)
+				elif filter_object.negate == False:
+					 cmd = "%s | grep '%s'" % (cmd,filter_object.pattern)
+				else:
+					raise Exception('bad filter negation value, should be boolean')
+
+
+			elif filter_object.filter_type == FILTER_TYPE_SED:
+				 cmd = "%s | sed '%s'" % (cmd,filter_object.pattern)
 			else:
-				raise Exception('bad filter negation value, should be boolean')
-
-
-		elif filter_object.filter_type == FILTER_TYPE_SED:
-			 cmd = "%s | sed '%s'" % (cmd,filter_object.pattern)
-		else:
-			raise Exception('bad filter type {%d}, should be 1 (grep) or 2 sed)' % (filter_object.filter_type))			
+				raise Exception('bad filter type {%d}, should be 1 (grep) or 2 sed)' % (filter_object.filter_type))			
 
 	if args.silent == False and args.more == True:
 		cmd = '%s | %s --path.settings /etc/logstash --path.data %s -f %s >> %s' \
