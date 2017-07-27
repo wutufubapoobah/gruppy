@@ -968,7 +968,7 @@ def build_command_for_processing_feed_file(feed,use_this_datafile):
 
 	# you can either use filters OR use mysql slow query format conversion, NOT BOTH
 	if feed.convert_slow_query_format == True:
-		conversion_string = '''  grep -v '^\(/rdsdbbin\|Tcp port: \|Time  \)' |perl -nae 'chomp();if ($_ !~ /^# Time: /){ print " $_";} else { print "\n\n","$_"; };END {print "\n\n";}' '''
+		conversion_string = r'''  grep -v '^\(/rdsdbbin\|Tcp port: \|Time  \)'|perl -nae 'chomp();if ($_ !~ /^# Time: /){ print " $_";} else { print "\n","$_"; };END {print "\n";}'|sed '/^[\t ]*$//' '''
 		cmd = '%s | %s' % (cmd,conversion_string)
 	else:
 		for filter_name,filter_object in feed.filters.iteritems():
