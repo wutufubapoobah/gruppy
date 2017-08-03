@@ -1,0 +1,69 @@
+#!/bin/bash
+
+############
+# What it is
+#  gruppyd
+#
+# What it does
+# 1. for each data feed defined in the database,
+# 2. run the gruppy program for that feed with polling interval* as a background process
+# 3. record the pid of the background process in /var/run/gruppy_<data-feed>.pid
+#
+# *Running gruppy with a polling interval causes it to run continuously
+#
+# Assumptions
+# A1. using sqlite3 as database system
+# A2. database is located in /var/lib/gruppy
+# A3. database is named gruppy.db, i.e. /var/lib/gruppy/gruppy.db
+# A4. the gruppy program is in the path
+###
+ #
+#
+
+POLLING_INTERVAL=30
+
+db_cmd=sqlite3
+db_fil=/var/lib/gruppy.db
+db_qry='select name from logstash_input_feeds where enabled = 1'
+
+prog=gruppy
+
+function echo2stderr()
+{
+        (>&2 echo "$@")
+}
+
+function abort()
+{
+        echo2stderr "$@"
+        exit 1;
+}
+
+# the preconditions are
+# 1. sqlite3 program is available
+# 2. database file exists and is readable
+# 3. the gruppy program exists and is executable (prog)
+
+function check_preconditions()
+{
+        which sqlite3 >/dev/null 2>&1
+        [[ $? -eq 0 ]] || abort "sqlite3 program not found"
+
+        [[ -r $db_fil ]] || abort "data file not found at $db_fil"
+
+        [[ -x $prog ]] || abort "program not found or not executable: $prog"
+}
+
+function runit()
+{
+	for x in $($db_cmd $db_fil "$db_qry")
+	do
+	    echo "Running in background: $prog -u $x -i $POLLING_INTERVAL"
+	    nohup $prog -u $x -i $POLLING_INTERVAL >/dev/null 2>/dev/null < /dev/null &
+	    echo "$!" > /var/run/guppy_${x}.pid
+	done
+
+}
+
+check_preconditions
+runit

@@ -1,0 +1,743 @@
+#!python
+
+"""
+ This is Gruppy.
+
+ Purpose
+
+  Organization is using ELK stack in a very AWS-intensive world.
+  Organization wants to use S3 as much as humanly possible, rather
+  than beats/filebeat, whatever. They have their reasons.
+
+  Challenge: S3 doesn't behave quite like most *NIX filesystems.
+  Apparently it doesn't play well with the default "file" 
+  input mechanism that comes with logstash out of the box,
+  especially with respect to keeping track of which data
+  has already been read and which has yet to be read.
+
+  An S3 plugin for logstash exists. Articles warn us, though,
+  that the algorithm(s) it employs for the sake of keeping
+  track of which log files have already been read and which
+  haven't, and where we are/were in the file, may involve 
+  brutal, inefficient, ugly force. 
+
+  If you're using the logstash S3 plugin and it's working
+  well for you, please disregard gruppy and move along,
+  nothing to see here.
+
+  Gruppy avoids logstash native file codec wonkiness with
+  respect to S3 by using cat and the logstash stdin codec.
+  Gruppy tracks which logs have already been processed 
+  via a sqlite3 database.
+
+  WARNING: this is offered as is, with no assurance of
+  suitability or workability. You should be aware that
+  no special precautions have been taken to secure, for 
+  instance, the database that gruppy uses.
+"""
+import sqlite3
+import sys
+import shlex
+import subprocess
+from subprocess import Popen, PIPE
+import os
+import fnmatch
+from string import Template
+from datetime import datetime
+from shutil import copyfile
+import argparse
+import logging
+import time
+import atexit
+import yaml
+import warnings
+
+__author__ = "Wutufubapoobah"
+__copyright__ = "Copyright 2017, Wutufubapoobah"
+__credits__ = ["Wutufubapoobah"]
+__license__ = "GPL"
+__version__ = "0.1.0"
+__maintainer__ = "utufubapoobah"
+__email__ = "wutufubapoobah@gmail.com"
+__status__ = "Development"
+
+# some useful constants
+APPNAME = 'gruppy'
+PROGNAME = '%s' % (APPNAME) # synonym
+VERSION = '0.1.1'
+PIDFILE = '/var/run/%s.pid' % (APPNAME)
+CFGFILE = '/etc/%s/%s.yml' % (APPNAME,APPNAME)
+
+# a few globals: cfg, logger, args
+cfg = {}
+logger = None
+args = None
+
+class FSPath(object):
+	"""
+	A FSPath object
+
+	Attributes:
+	 path 
+	 feed_name
+	 pattern
+	"""
+	def __init__(self,path,feed_name,pattern):
+
+		self.path_template = path
+		self.feed_name = feed_name
+		if pattern == None:
+			self.pattern = '*'
+		else:
+			self.pattern = pattern
+
+	def __repr__(self):
+		return """
+<%s:
+ %-20s: %s
+ %-20s: %s
+ %-20s: %r
+>""" % ("FSPath","path_template",self.path_template,"feed_name",self.feed_name,"pattern",self.pattern)
+
+	def find_files(self):
+		"""
+		Return a list of files found under path that match self.pattern,
+		where path is obtained through parameter substitution from self.path_template
+		"""
+
+		path = ''
+		if '$' in self.path_template:
+
+			# perform template parameter substitution on path
+			t = Template(self.path_template)
+			path = t.substitute(THIS_YEAR = datetime.now().year, 
+				THIS_MONTH = '%02d' % (datetime.now().month), 
+				THIS_DATE = '%02d' % (datetime.now().day))
+
+		else:
+			path = self.path_template
+
+		msg = "seeking files in path %s" % (path)
+		logger.info(msg)
+		#print "seeking files in path %s" % (path)
+		# first, verify that path exists
+		matches = []
+		for root, dirnames, filenames in os.walk(path):
+			for filename in fnmatch.filter(filenames, self.pattern):
+				logger.debug("joining root (%s) to fname (%s)" % (root,filename))
+				matches.append(os.path.join(root, filename))
+
+		files_sorted_by_ctime = sorted(matches, key=os.path.getctime)
+		return files_sorted_by_ctime
+
+class Feed(object):
+	"""
+	A Logstash input feed
+
+	Attributes:
+	 id - integer
+	 name 
+	 config_filespec
+	 enabled - 0 (false) or 1 (true)
+	 transform - 0 (false) or 1 (true)
+	 transformation
+
+	 Note: transformation is defined as an external command, script or program that 
+	 would be run with the data file as sole argument. 
+
+	 How transformations work is that ordinarily, input feed processes input file in place.
+	 When tranform == True, though, we copy input file to temp directory,
+	 apply the transformation, then input using the tranformed copy.
+	"""
+	def __init__(self,name,cfgfile,enabled,transform,transformation):
+		"""initialize the object"""
+
+		self.name = name
+		self.cfgfile = cfgfile
+		self.enabled = False # disabled by default
+		if enabled == 0:
+			self.enabled = False
+		elif enabled == 1:
+			self.enabled = True
+		else:
+			raise Exception('Feed init received invalid value for "enabled" attribute')
+		self.transform = False
+		if transform == 1:
+			self.transform = True
+		self.transformation = transformation
+
+	def __repr__(self):
+		return """
+<%s:
+ %-20s: %s
+ %-20s: %s
+ %-20s: %r
+ %-20s: %r
+ %-20s: %s
+>""" % ("Feed","name",self.name,"cfgfile",self.cfgfile,"enabled?",
+	self.enabled,"transform?",self.transform,"transformation",self.transformation)
+
+	def is_valid_config_file(self):
+		""" verify that self.cfgfile is a valid logstash config file """
+
+		msg = "checking to see if %s has a valid config file, please wait ... " % (self.name)
+		logger.info(msg)
+		#sys.stdout.write("checking to see if %s has a valid config file, please wait ... " % (self.name))
+		#sys.stdout.flush()
+		#/usr/share/logstash/bin/logstash --path.settings /etc/logstash -f /usr/share/logstash/conf/elb-consolidated-logstash.conf -t
+		logger.debug('%s --path.settings /etc/logstash -f %s -t' % (cfg['logstashbin'],self.cfgfile))
+		cmd = '%s --path.settings /etc/logstash -f %s -t' % (cfg['logstashbin'],self.cfgfile)
+		process = Popen(shlex.split(cmd), stdout=PIPE)
+		process.communicate()
+		exit_code = process.wait()
+		# send newline
+		#print
+		if exit_code != 0:
+			msg = "invalid config"
+			logger.error(msg)
+			#print "invalid config"
+			return False
+
+		msg = "config ok"
+		logger.info(msg)
+		#print "config ok"
+		return True
+
+	def fetch_interesting_paths(self):
+		""" fetch interesting paths from the database """
+
+		logger.info("fetching interesting paths for feed %s" % (self.name))
+
+		try:
+			conn = sqlite3.connect(cfg['dbfilespec'])
+		except Exception, e:
+			msg = "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
+			logger.error(msg)
+			return None
+
+		c = conn.cursor()
+
+		# get list of feeds and their properties
+		query_get_interesting_paths = "SELECT * FROM interesting_paths WHERE feed_name = '%s'" % (self.name)
+		try:
+			c.execute(query_get_interesting_paths)
+		except Exception, e:
+			msg = "Execute fail on db %s for query %s: %s" \
+			     % (cfg['dbfilespec'],query_get_interesting_paths,str(e))
+			logger.error(msg)
+			conn.close()
+			return None
+
+		# fetchall returns a list of tuples
+		rows = []
+		try:
+			rows = c.fetchall()
+		except Exception, e:
+			msg = "Fetchall fail on db %s for query %s: %s" \
+			    % (cfg['dbfilespec'],query_get_interesting_paths,str(e))
+			logger.error(msg)
+			conn.close()
+			return None
+
+		interesting_paths = []
+		for r in rows:
+			arglist = list(r)
+			interesting_paths.append(FSPath(*arglist))
+
+		conn.close()
+
+		return interesting_paths
+
+def exit_handler():
+	""" things to do before we go """
+
+        try:
+                os.remove(PIDFILE)
+        except:
+                pass
+
+def init():
+	""" everything we want to do to prepare for success """
+
+	global cfg
+	global logger
+	global args
+
+	atexit.register(exit_handler)
+	# set default configurable values
+	cfg['dbfilespec'] = '/var/lib/%s/%s.db' % (PROGNAME,PROGNAME)
+	cfg['logdir'] = '/var/log/%s' % (PROGNAME)
+	cfg['logfile'] = '%s/%s.log' % (cfg['logdir'],PROGNAME)
+	cfg['loglevel'] = 'info'
+	cfg['logstashbin'] = '/usr/share/logstash/bin/logstash'
+
+	try:
+		with open('pyymltst.yml','r') as f:
+			cfg_file_data = yaml.safe_load(f)
+		if 'database.filespec' in cfg_file_data:
+			cfg['dbfilespec'] = cfg_file_data['database.filespec']
+		if 'logging.directory' in cfg_file_data:
+			cfg['logdir'] = cfg_file_data['logging.directory']
+		if 'logging.filespec' in cfg_file_data:
+			cfg['logfile'] = cfg_file_data['logging.filespec']
+		if 'logging.directory' in cfg_file_data:
+			cfg['logdir'] = cfg_file_data['logging.directory']
+		if 'logging.level' in cfg_file_data:
+			cfg['loglevel'] = cfg_file_data['logging.level']
+		if 'logstash.program' in cfg_file_data:
+			cfg['logstashbin'] = cfg_file_data['logstash.program']
+
+	except:
+		msg = "unable to read configfile {%s}, proceeding with defaults" % (CFGFILE)
+		warnings.warn(msg)
+		pass
+
+	# argparser
+	argparser = argparse.ArgumentParser(
+		description="Realtime logstash input processing that supports S3")
+	argparser.add_argument("-i","--interval", type=int, 
+		help="set polling interval (in seconds)")
+	argparser.add_argument("-u","--use", 
+		help="specify input feed to use by name")
+	argparser.add_argument("-v","--version", 
+		action="store_true", default=False, help="show version")
+	argparser.add_argument("-m", "--more", 
+		action="store_true", default=False, help="more information")
+	argparser.add_argument("-s", "--silent", 
+		action="store_true", default=False, help="disable logging and messages")
+	args = argparser.parse_args()
+
+	# set up logging
+	# if main logfile doesn't exist, create it
+	logdir = os.path.dirname(cfg['logfile'])
+	if not os.path.isdir(logdir):
+		try:
+			os.mkdir(logdir)
+		except:
+			msg = "unable to create logdir"
+			print "%s" % (msg)
+
+	if not os.path.isfile(cfg['logfile']):
+		try:
+			with open(cfg['logfile'], 'a'):
+				os.utime(cfg['logfile'], None)
+		except:
+			msg = "unable to create logfile {%s}" % (cfg['logfile'])
+			# can't log the error! should print this to stderr
+			print "%s" % (msg)
+
+	# logfile = '/var/log/fetch_%s_data.log' % (feed.name)
+	logger = logging.getLogger(__name__)
+	logger.setLevel(logging.DEBUG)
+	# create file handler for logging
+	handler = logging.FileHandler(cfg['logfile'])
+	handler.setLevel(logging.DEBUG)
+	# create a logging format
+	formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+	handler.setFormatter(formatter)
+	# add the handler to the logger
+	logger.addHandler(handler)
+	print "Logging to %s" % (cfg['logfile'])
+	logger.info("starting")
+
+	# write pid to pidfile
+	pid = str(os.getpid())
+	try:
+		pidfile = open(PIDFILE, 'w')
+		pidfile.write(pid)
+		pidfile.close()
+	except:
+		msg = "unable to write process id {%s} to pidfile {%s}" % (pid,PIDFILE)
+		logger.warning(msg)
+    	#logger.warning("unable to write process id {%s} to pidfile {%s}" % (pid,PIDFILE))
+
+def fetch_feeds():
+	""" return a dictionary of feeds in which key is feed name """
+
+	try:
+		conn = sqlite3.connect(cfg['dbfilespec'])
+	except Exception, e:
+		print "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
+		return None
+
+	c = conn.cursor()
+
+	# get list of feeds and their properties
+	query_get_feeds = 'SELECT * FROM feeds'
+	try:
+		c.execute(query_get_feeds)
+	except Exception, e:
+		print "Execute fail on db %s for query %s: %s" \
+		 % (cfg['dbfilespec'],query_get_feeds,str(e))
+		conn.close()
+		return None
+
+	# fetchall returns a list of tuples
+	rows = []
+	try:
+		rows = c.fetchall()
+	except Exception, e:
+		print "Fetchall fail on db %s for query %s: %s" \
+		% (cfg['dbfilespec'],query_get_feeds,str(e))
+		conn.close()
+		return None
+
+	feeds = {}
+	for r in rows:
+		# name is the first element in tuple
+		feed_name = r[0]
+		arglist = list(r)
+		feeds[feed_name] = Feed(*arglist)
+
+	conn.close()
+	logger.debug(feeds)
+	return feeds
+
+def fetch_a_feed(feed_name):
+	""" fetch an input feed """
+
+	logger.info("fetching input feed %s" % (feed_name))
+	try:
+		conn = sqlite3.connect(cfg['dbfilespec'])
+	except Exception, e:
+		msg = "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
+		logger.error(msg)
+		return None
+
+	c = conn.cursor()
+
+	# get list of feeds and their properties
+	query_get_feed = "SELECT * FROM feeds WHERE name = '%s'" % (feed_name)
+	try:
+		c.execute(query_get_feed)
+	except Exception, e:
+		msg = "Execute fail on db %s for query %s: %s" \
+		     % (cfg['dbfilespec'],query_get_feed,str(e))
+		logger.error(msg)
+		conn.close()
+		return None
+
+	# fetchone returns a tuple
+	row = None
+	try:
+		row = c.fetchone()
+	except Exception, e:
+		msg = "Fetchone fail on db %s for query %s: %s" \
+		    % (cfg['dbfilespec'],query_get_feed,str(e))
+		logger.error(msg)
+		conn.close()
+		return None
+
+	if row == None:
+		# no feed found with that name
+		conn.close()
+		return None
+	# should assert that first element in tuple matches feed_name
+	column_list = list(row)
+	obj = Feed(*column_list)
+
+	conn.close()
+	logger.debug(obj)
+	return obj
+
+def file_already_processed(filespec):
+	""" determine whether file was already processed, return T/F (on error, return None) """
+
+	try:
+		conn = sqlite3.connect(cfg['dbfilespec'])
+	except Exception, e:
+		msg = "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
+		logger.error(msg)
+		return None
+
+	c = conn.cursor()
+
+	# get list of feeds and their properties
+	query_get_already_processed = "SELECT * FROM files_successfully_processed WHERE filespec = '%s'" \
+	  % (filespec)
+
+	try:
+		c.execute(query_get_already_processed)
+	except Exception, e:
+		msg = "Execute fail on db %s for query %s: %s" \
+		     % (cfg['dbfilespec'],query_get_already_processed,str(e))
+		logger.error(msg)
+		conn.close()
+		return None
+
+	# fetchone returns a list of tuples
+	rows = []
+	try:
+		rows = c.fetchall()
+	except Exception, e:
+		msg = "Fetchall fail on db %s for query %s: %s" % (cfg['dbfilespec'],query_get_already_processed,str(e))
+		logger.error(msg)
+		conn.close()
+		return None
+
+	if len(rows) == 0:
+		conn.close()
+		return False
+
+	if len(rows) > 0:
+		conn.close()
+		return True
+
+	# wtf? len(rows) returned negative?
+	# should this be an exception? don't know what's going on beyond this point
+	msg = "len(rows) returned a negative value"
+	logger.warning(msg)
+	#warnings.warn(msg)
+	conn.close()
+	return None
+
+# Callers should always check the return value!
+# args: filespec, transformation (a string)
+# algorithm:
+#  copies filespec to tempdir,
+#  transforms the copy by applying the transformation to the copy in tempdir
+#  returns filespec of copy in tempdir
+# return values:
+#  on success, returns tempfile
+#  on failure, returns None
+# 
+def transform_input_data(filespec,transformation):
+	""" transform file before using it as input """
+
+	# ideally, we'd safely and securely create tempfile using python tempfile module
+	# for the sake of velocity and to simplify diagnostics and troubleshooting,
+	# we're going to use original filename for now.
+	tempfile = '/tmp/%s' % (os.path.basename(filespec))
+	copyfile(filespec, tempfile)
+
+	# now apply transformation
+	msg = "applying transformation, please wait ... "
+	#sys.stdout.write("applying transformation, please wait ... ")
+	#sys.stdout.flush()
+	cmd = '%s %s' % (transformation,tempfile)
+	process = Popen(shlex.split(cmd), stdout=PIPE)
+	process.communicate()
+	exit_code = process.wait()
+	# send newline
+	#print
+	if exit_code != 0:
+		msg = "transformation returned a non-zero value"
+		logger.warning(msg)
+		#print "transformation returned a non-zero value"
+		return None
+
+	msg = "tranformation complete"
+	logger.info(msg)
+	#print "tranformation complete"
+	return tempfile
+
+
+def process_file(feed,filespec):
+	""" cat <inputfile> | <logstash-program> -f <feed-configfile> """
+
+	msg = "using the %s feed to process %s, please wait ... " % (feed.name,filespec)
+	logger.info(msg)
+	#sys.stdout.write("using the %s feed to process %s, please wait ... " % (feed.name,filespec))
+	#sys.stdout.flush()
+
+	# if feed.transform == True, 
+	# then (1) copy data file to tempdir, (2) transform the copy, (3) update using the transformed copy
+	use_this_datafile = filespec 
+	if feed.transform == True:
+		retval = transform_input_data(filespec,feed.transformation)
+		if retval == None:
+			msg = "transformation failed, skipping data file %s" % (filespec)
+			logger.warning(msg)
+			#warnings.warn("\n%s" % (msg))
+			return False
+		# if retval not None, it should be tempfile
+		use_this_datafile = retval
+
+	# verify that data file exists before processing it?
+	if not os.path.isfile(use_this_datafile):
+		msg = "data file missing, unable to process it: %s" % (use_this_datafile)
+		logger.warning(msg)
+		#warnings.warn("\n%s" % (msg))
+		return False
+
+	cmd = None
+	cmdlog = '/var/log/fetch_%s_data.log' % (feed.name)
+	logger.info('command output is being written to %s' % (cmdlog))
+
+	if args.silent == False and args.more == True:
+		cmd = 'cat %s | %s --path.settings /etc/logstash -f %s >> %s' \
+		% (use_this_datafile, cfg['logstashbin'], feed.cfgfile, cmdlog)
+
+	elif args.more == False:
+		cmd = 'cat %s | %s -f %s >> %s' % (use_this_datafile, cfg['logstashbin'], feed.cfgfile, cmdlog)
+
+	logger.debug("cmd: %s" % (cmd))
+	retval = subprocess.call(cmd, shell=True)
+	logger.debug("finished processing file")
+	if retval != 0:
+		msg = "file processing failure, command returned nonzero value %d" % (retval)
+		logger.error(msg)
+		#print "file processing failure"
+		return False
+
+	if feed.transform == True:
+		# before removing, make sure it's tempfile, NOT original!
+		dirname = os.path.dirname(use_this_datafile)
+		if dirname == '/tmp':
+			try:
+				os.remove(use_this_datafile)
+			except:
+				msg = "failed to remove transformed datafile %s" % (use_this_datafile)
+				logger.warning(msg)
+		else:
+			msg = "expecting to remove transformed datafile in tempdir but datafile not tempfile: %s" % (use_this_datafile)
+			logger.warning(msg)
+			#warnings.warn("\n%s" % (msg))
+
+		# need to update the 'files_successfully_processed' table in the database
+		# let the caller do that; make sure caller checks return code and follows up
+
+	return True
+
+def brag_about_success(feed,filespec):
+	""" here is where we update the record in db of files successfully processed """
+
+	try:
+		conn = sqlite3.connect(cfg['dbfilespec'])
+	except Exception, e:
+		msg = "Connect fail for db %s: %s" % (cfg['dbfilespec'],str(e))
+		logger.error(msg)
+		return False
+
+	c = conn.cursor()
+
+	# get list of feeds and their properties
+	sql_insert = "INSERT OR IGNORE INTO files_successfully_processed(filespec) VALUES ('%s')" \
+	  % (filespec)
+
+	logger.debug(sql_insert)
+
+	try:
+		c.execute(sql_insert)
+	except Exception, e:
+		msg = "Execute fail on db %s for query %s: %s" \
+		 % (cfg['dbfilespec'],sql_insert,str(e))
+		logger.error(msg)
+		conn.close()
+		return False
+
+	try:
+		conn.commit()
+	except Exception, e:
+		msg =  "Commit fail on db %s for query %s: %s" \
+		% (cfg['dbfilespec'],sql_insert,str(e))
+		logger.error(msg)
+		conn.close()
+		return False
+
+	conn.close()
+	return True
+
+def process_feed(feed):
+	""" fetch interesting paths associated with feed from db, then process those """
+
+	logger.info("processing feed %s" % (feed.name))
+	# if feed is not enabled, ignore it
+	if not feed.enabled == True:
+		msg = "skipping disabled feed %s" % (feed.name)
+		logger.info(msg)
+		return
+
+	# 1. verify that the config file is valid
+	if not feed.is_valid_config_file():
+		msg = 'input feed %s has invalid config file %s' % (feed.name,feed.cfgfile)
+		logger.warning(msg)
+		#warnings.warn(msg)
+		return
+
+	# 2. fetch the list of interesting paths associated with this feed
+	interesting_paths = feed.fetch_interesting_paths()
+	logger.debug(interesting_paths)
+
+	# 2. for each interesting path associated with this feed,
+	for p in interesting_paths:
+		# is the path blacklisted? if so, skip
+		logger.debug("processing path: %s" % (p))
+		# 2.1. generate a list of all filespecs for files that match the pattern
+		files = p.find_files()
+		logger.info("found files for path")
+		logger.debug(files)
+
+		# 2.1.1. for each file within the interesting path that match the pattern,
+		for f in files:
+			# 2.1.1.1. check in db to see if the file has already been processed 
+			if file_already_processed(f):
+				# if it has, ignore and continue
+				logger.info("skipping already processed file: %s" % (f))
+				continue
+
+			# otherwise process the file
+			# arguments to 'process_file' are a feed and a filespec
+			retval = process_file(feed,f)
+			# be sure to check the return value
+			# returns True on success, False (or None) on fail
+			if retval == True:
+				# update the 'files_successfully_processed' table
+				r = brag_about_success(feed,f)
+				if not r == True:
+					msg = "failed to update the files_successfully_processed table"
+					logger.warning(msg)
+					#warnings.warn(msg)
+			else:
+				logger.warning("process_file returned a non-True value")
+			time.sleep(1)
+
+def run_once(feed_name):
+	""" fetch feeds and process them on time only """
+
+	if feed_name == None:
+		# process all enabled feeds
+		feeds = fetch_feeds()
+		for n in feeds:
+			process_feed(feeds[n])
+
+		return
+
+	# otherwise process single feed by name
+	feed = fetch_a_feed(args.use)
+	if feed == None:
+		msg = "No logstash input feed found in guppy db named %s" % (args.use)
+		logger.error(msg)
+		print msg
+		sys.exit(1)
+
+	process_feed(feed)
+
+
+def run_continuously(polling_interval, feed_name):
+	""" fetch feeds and process them, rinse and repeat, endlessly """
+	# could/should assert that polling interval is set
+	while(1):
+		run_once(feed_name)
+		logger.info("sleeping %d seconds until next polling time" % (polling_interval))
+		time.sleep(polling_interval)
+
+
+def show_version():
+	""" show us what's what """
+
+	print " %s version %s" % (APPNAME, VERSION)
+	sys.exit(0)
+
+
+init()
+
+""" MAIN starts here """
+if args.interval == None:
+	logger.info("running once")
+	run_once(args.use)  # args.use is name of an input feed
+	logger.info("processing complete")
+
+else:
+	logger.info("running continuously with polling interval = %d" % (args.interval))
+	run_continuously(args.interval,args.use)
