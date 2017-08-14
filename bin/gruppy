@@ -186,8 +186,12 @@ class FSPath(object):
 		# but we only care about filenames, which are final element of multicolumn line
 		filepaths = []
 		# columns are date, time, size, filename
+		# skip files that don't match current year and month
+		pattern = re.compile('^%04d-%02d.*' % (datetime.now().year,datetime.now().month))
 		for line in lines:
-			filepaths.append("%s/%s" % (path,line.split()[3]))
+			filename = line.split()[3]
+			if (pattern.match(filename)):
+				filepaths.append("%s/%s" % (path,filename))
 
 		return filepaths
 
