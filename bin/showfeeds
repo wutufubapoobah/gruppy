@@ -1,0 +1,38 @@
+#!/usr/bin/env python
+
+from grupster import GruppyConfig, Feed, FeedFilter, init_logging, fetch_enabled_feeds, fetch_a_feed
+import pprint
+
+pp = pprint.PrettyPrinter(indent=4)
+
+# some useful constants
+APPNAME = 'gruppy'
+PROGNAME = '%s' % (APPNAME) # synonym
+VERSION = '0.1.3'
+PIDFILE = '/var/run/%s.pid' % (APPNAME)
+CFGFILE = '/etc/%s/%s.yml' % (APPNAME,APPNAME)
+AWSBIN = '/root/.local/bin/aws' # should test existence in precondition check
+CTGZJSON2KVRECORDSBIN = '/bin/cvt-cloudtrail-gz-json-to-kv.py'
+# sleeptime in seconds
+SLEEPTIME = 2
+
+# feed type constants
+FT_UNKNOWN = 0
+FT_FILESYSTEM = 1
+FT_S3_VIA_AWSCLI = 2
+FT_S3_AWS_GZJSON = 3
+
+FILTER_TYPE_UNKNOWN = 0
+FILTER_TYPE_GREP = 1
+FILTER_TYPE_SED = 2
+
+
+cfg = GruppyConfig()
+init_logging(cfg)
+
+feeds = fetch_enabled_feeds(cfg)
+for k,feed in feeds.iteritems():
+	pp.pprint(feed)
+
+
+

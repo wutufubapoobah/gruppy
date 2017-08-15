@@ -36,6 +36,7 @@
   instance, the database that gruppy uses.
 """
 import sqlite3
+import re
 import sys
 import shlex
 import subprocess
