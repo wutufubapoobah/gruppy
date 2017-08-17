@@ -149,7 +149,7 @@ class FSPath(object):
 		files_sorted_by_ctime = sorted(matches, key=os.path.getctime)
 		return files_sorted_by_ctime
 
-	def find_files_on_s3_via_awscli(self):
+	def find_files_on_s3_via_awscli(self,filter_files_by_date):
 		"""
 		Find files on s3 in target directory by calling 'aws s3 ls <path>'
 		where path is obtained through parameter substitution from self.path_template
@@ -191,7 +191,10 @@ class FSPath(object):
 		pattern = re.compile('^%04d-%02d.*' % (datetime.now().year,datetime.now().month))
 		for line in lines:
 			filename = line.split()[3]
-			if (pattern.match(filename)):
+			if filter_files_by_date == True:
+				if (pattern.match(filename)):
+					filepaths.append("%s/%s" % (path,filename))
+			else:
 				filepaths.append("%s/%s" % (path,filename))
 
 		return filepaths
@@ -1108,8 +1111,10 @@ def find_files_by_feed_and_path(feed,p):
 	# 2.1. generate a list of all filespecs for files that match the pattern
 	if feed.type == FT_FILESYSTEM:
 		files = p.find_files()
-	elif feed.type == FT_S3_VIA_AWSCLI or feed.type == FT_S3_AWS_GZJSON:
-		files = p.find_files_on_s3_via_awscli()
+	elif feed.type == FT_S3_VIA_AWSCLI:
+		files = p.find_files_on_s3_via_awscli(True)
+	elif feed.type == FT_S3_AWS_GZJSON:
+		files = p.find_files_on_s3_via_awscli(False)
 	# otherwise, unsupported
 	else:
 		raise Exception("unrecognized feed type: %d" % (feed.type))
